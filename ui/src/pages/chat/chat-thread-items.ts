@@ -534,25 +534,49 @@ export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProje
     }
     placementsByKey.set(item.key, placement);
   }
+  const effectiveTimestampsByKey = new Map<string, number | null>();
+  const resolvingTimestampKeys = new Set<string>();
+  const resolveEffectiveTimestamp = (key: string): number | null => {
+    if (effectiveTimestampsByKey.has(key)) {
+      return effectiveTimestampsByKey.get(key) ?? null;
+    }
+    const rawTimestamp = timestampsByKey.get(key) ?? null;
+    const predecessorKey = placementsByKey.get(key)?.predecessorKey;
+    if (!predecessorKey || resolvingTimestampKeys.has(key)) {
+      return rawTimestamp;
+    }
+    resolvingTimestampKeys.add(key);
+    const predecessorTimestamp = resolveEffectiveTimestamp(predecessorKey);
+    resolvingTimestampKeys.delete(key);
+    const effectiveTimestamp =
+      predecessorTimestamp == null
+        ? rawTimestamp
+        : rawTimestamp == null
+          ? predecessorTimestamp
+          : Math.max(rawTimestamp, predecessorTimestamp);
+    effectiveTimestampsByKey.set(key, effectiveTimestamp);
+    return effectiveTimestamp;
+  };
   // Sort inserts among themselves by timestamp, preserving the original index
   // order for ties and honoring predecessor relationships so a stream segment
   // stays before the tool card it introduced.
   const sortedInserts = inserts
     .map(({ item }, index) => {
-      const rawTimestamp = chatItemTimestamp(item);
       const predecessorKey = placementsByKey.get(item.key)?.predecessorKey;
-      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
       return {
         item,
         index,
         predecessorKey,
-        effectiveTimestamp:
-          rawTimestamp != null && predecessorTimestamp != null
-            ? Math.max(rawTimestamp, predecessorTimestamp)
-            : rawTimestamp,
+        effectiveTimestamp: resolveEffectiveTimestamp(item.key),
       };
     })
     .toSorted((a, b) => {
+      if (a.predecessorKey === b.item.key) {
+        return 1;
+      }
+      if (b.predecessorKey === a.item.key) {
+        return -1;
+      }
       if (a.effectiveTimestamp == null && b.effectiveTimestamp == null) {
         return a.index - b.index;
       }
@@ -564,12 +588,6 @@ export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProje
       }
       if (a.effectiveTimestamp !== b.effectiveTimestamp) {
         return a.effectiveTimestamp - b.effectiveTimestamp;
-      }
-      if (a.predecessorKey === b.item.key) {
-        return 1;
-      }
-      if (b.predecessorKey === a.item.key) {
-        return -1;
       }
       return a.index - b.index;
     });

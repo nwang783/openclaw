@@ -154,6 +154,9 @@ export function applySessionMessagePayload(
     prunePersistedAssistantStreamSegments(state, message);
     if (assistantOwnerRunId && runActive === false) {
       state.chatStream = null;
+      state.chatStreamItemId = undefined;
+      state.chatStreamItemStartOffset = undefined;
+      state.chatStreamItemPrefix = undefined;
       state.chatStreamStartedAt = null;
       maybeResetToolStreamRun(state, assistantOwnerRunId);
     }

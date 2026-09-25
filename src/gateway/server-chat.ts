@@ -62,6 +62,7 @@ import {
   mergeChatTextPayload,
   assistantWireProjection,
   cancelPendingLiveTextFlush,
+  chatLiveTextKey,
   chatWireProjection,
   liveTextDelivery,
   prepareAgentWirePayload,
@@ -787,13 +788,8 @@ export function createAgentEventHandler({
     const now = Date.now();
     run.deltaSentAt = now;
     const spawnedBy = resolveSpawnedBy(sessionKey);
-    const deliveryKey = JSON.stringify([
-      "chat",
-      sessionKey,
-      agentId,
-      opts?.controlUiVisible ?? true,
-    ]);
-    const canvasBlocks = run.canvasBlocks;
+    const visible = opts?.controlUiVisible ?? true;
+    const deliveryKey = chatLiveTextKey(agentId, broadcastDelta.itemId, sessionKey, visible);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -802,10 +798,12 @@ export function createAgentEventHandler({
       seq,
       state: "delta" as const,
       deltaText: broadcastDelta.deltaText,
+      itemId: broadcastDelta.itemId,
+      itemStartOffset: broadcastDelta.itemStartOffset,
       ...(broadcastDelta.replace ? { replace: true as const } : {}),
       message: appendChatCanvasBlocksToMessage(
         { role: "assistant", content: [{ type: "text", text }], timestamp: now },
-        canvasBlocks ?? [],
+        run.canvasBlocks ?? [],
       ),
     };
     emitFirstAssistantChatSendTiming(
@@ -813,7 +811,7 @@ export function createAgentEventHandler({
     );
     sendLivePayload("chat", sessionKey, payload, {
       agentId,
-      controlUiVisible: opts?.controlUiVisible ?? true,
+      controlUiVisible: visible,
       dropIfSlow: true,
       liveText: liveTextDelivery(
         chatRunState,
@@ -829,7 +827,7 @@ export function createAgentEventHandler({
           key: deliveryKey,
           text,
           now,
-          canvasBlocks,
+          canvasBlocks: run.canvasBlocks,
           replace: broadcastDelta.replace,
         }),
       ),

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
+import { accumulatedStreamState } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -35,16 +36,15 @@ import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
   latestStreamBoundaryRunId,
   reconcileTerminalStreamBoundary,
+  rolloverChatStream,
 } from "./stream-causal-boundary.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
-import {
-  discardStreamSegmentIndexes,
-  reconcilePersistedAssistantStream,
-} from "./stream-segment-pruning.ts";
+import { reconcilePersistedAssistantStream } from "./stream-segment-pruning.ts";
+import { discardStreamSegmentIndexes } from "./stream-segment-retirement.ts";
 import {
   authoritativeHistoryAppliedForRun,
   normalizeFinalAssistantMessage,
@@ -60,6 +60,28 @@ function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
   const candidate = asRecord(message);
   return candidate?.role === "assistant" && Array.isArray(candidate.content) ? candidate : null;
+}
+
+function sharedCompletedParagraphPrefixLength(previous: string, next: string): number | undefined {
+  const limit = Math.min(previous.length, next.length);
+  let commonLength = 0;
+  while (commonLength < limit && previous[commonLength] === next[commonLength]) {
+    commonLength += 1;
+  }
+  let completedLength: number | undefined;
+  for (const match of previous.slice(0, commonLength).matchAll(/(?:\r?\n){2}/gu)) {
+    completedLength = (match.index ?? 0) + match[0].length;
+  }
+  return completedLength;
+}
+
+function firstParagraphSeparatorAfter(text: string, offset: number): RegExpExecArray | null {
+  for (const match of text.matchAll(/(?:\r?\n){2}/gu)) {
+    if ((match.index ?? 0) + match[0].length > offset) {
+      return match;
+    }
+  }
+  return null;
 }
 
 function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
@@ -364,8 +386,163 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       !isSilentReplyStream(next) &&
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
+      const producerItemStart =
+        Number.isInteger(payload.itemStartOffset) &&
+        (payload.itemStartOffset ?? -1) >= 0 &&
+        (payload.itemStartOffset ?? Number.POSITIVE_INFINITY) <= next.length
+          ? payload.itemStartOffset
+          : undefined;
+      const itemChanged =
+        state.chatStreamItemId !== payload.itemId ||
+        Boolean(
+          payload.itemId &&
+          state.chatStreamItemId === payload.itemId &&
+          producerItemStart !== undefined &&
+          (state.chatStreamItemStartOffset === undefined
+            ? producerItemStart > 0
+            : producerItemStart !== state.chatStreamItemStartOffset),
+        );
+      const itemBoundaryUpdated =
+        Boolean(payload.itemId) &&
+        state.chatStreamItemId === payload.itemId &&
+        producerItemStart !== undefined &&
+        producerItemStart !== state.chatStreamItemStartOffset;
+      const streamSegments = state.chatStreamSegments ?? [];
+      const accumulated = accumulatedStreamState(streamSegments, (text) => text, state.chatRunId);
+      const priorCumulative = state.chatStream ?? accumulated.text;
+      const offsetlessCumulativeOwner =
+        state.chatStreamItemId ?? (state.chatStream === null ? accumulated.itemId : undefined);
+      const rolledSeparator = priorCumulative
+        ? /^(?:\r?\n){2}/u.exec(next.slice(priorCumulative.length))?.[0]
+        : undefined;
+      const rolledPartialIndex =
+        payload.itemId &&
+        itemChanged &&
+        state.chatStream === null &&
+        accumulated.text &&
+        next.startsWith(accumulated.text)
+          ? streamSegments.findLastIndex(
+              (segment) =>
+                segment.runId === state.chatRunId &&
+                segment.cumulative === true &&
+                segment.itemStartOffset !== undefined &&
+                (segment.itemStartOffset !== 0 ||
+                  (producerItemStart !== undefined &&
+                    !/^\s/u.test(next.slice(accumulated.text?.length ?? 0)))) &&
+                segment.text === accumulated.text,
+            )
+          : -1;
+      const completedRolledSeparator =
+        rolledPartialIndex >= 0 && accumulated.text
+          ? firstParagraphSeparatorAfter(next, accumulated.text.length)
+          : null;
+      const candidateRolledTextEnd =
+        completedRolledSeparator?.index === undefined ? undefined : completedRolledSeparator.index;
+      const candidateRolledItemStart =
+        candidateRolledTextEnd === undefined || !completedRolledSeparator
+          ? undefined
+          : candidateRolledTextEnd + completedRolledSeparator[0].length;
+      const completesBeforeProducerBoundary =
+        candidateRolledItemStart !== undefined &&
+        (producerItemStart === undefined || candidateRolledItemStart <= producerItemStart);
+      const completedRolledTextEnd = completesBeforeProducerBoundary
+        ? candidateRolledTextEnd
+        : undefined;
+      const completedRolledItemStart = completesBeforeProducerBoundary
+        ? candidateRolledItemStart
+        : undefined;
+      const sharedCompletedPrefixLength =
+        producerItemStart === undefined &&
+        payload.itemId &&
+        itemChanged &&
+        priorCumulative &&
+        !next.startsWith(priorCumulative)
+          ? sharedCompletedParagraphPrefixLength(priorCumulative, next)
+          : undefined;
+      const effectiveItemStart =
+        producerItemStart ??
+        (payload.itemId && priorCumulative && next.startsWith(priorCumulative) && rolledSeparator
+          ? priorCumulative.length + rolledSeparator.length
+          : (completedRolledItemStart ?? sharedCompletedPrefixLength));
+      const offsetlessCumulativeBase = state.chatStream ?? priorCumulative;
+      const continuesOffsetlessCumulative =
+        (itemChanged || Boolean(!payload.itemId && offsetlessCumulativeOwner)) &&
+        effectiveItemStart === undefined &&
+        offsetlessCumulativeBase !== null &&
+        next.length > offsetlessCumulativeBase.length &&
+        next.startsWith(offsetlessCumulativeBase);
+      const continuesUnkeyedStream =
+        state.chatStream !== null &&
+        next.startsWith(state.chatStream) &&
+        (effectiveItemStart === undefined ||
+          (effectiveItemStart === 0 && state.chatStreamRecoveredWithoutItemId === true));
+      const replacesRecoveredStream =
+        state.chatStreamRecoveredWithoutItemId === true &&
+        effectiveItemStart === 0 &&
+        payload.replace === true;
+      const replacesCurrentProjection =
+        payload.replace === true && !payload.itemId && state.chatStream !== null;
+      const firstKeyedItemAfterUnkeyedStream =
+        itemChanged &&
+        payload.itemId &&
+        !state.chatStreamItemId &&
+        state.chatStream !== null &&
+        !continuesUnkeyedStream &&
+        !replacesRecoveredStream;
+      const preservesKeyedOwner =
+        !payload.itemId &&
+        Boolean(offsetlessCumulativeOwner) &&
+        (continuesOffsetlessCumulative || replacesCurrentProjection);
+      if (
+        itemChanged &&
+        state.chatRunId &&
+        (state.chatStreamItemId || firstKeyedItemAfterUnkeyedStream) &&
+        !continuesOffsetlessCumulative &&
+        !replacesCurrentProjection
+      ) {
+        rolloverChatStream(state, {
+          runId: state.chatRunId,
+          ...(effectiveItemStart === undefined
+            ? {}
+            : { nextItemPrefix: next.slice(0, effectiveItemStart) }),
+        });
+      }
+      if ((itemChanged || itemBoundaryUpdated) && !preservesKeyedOwner) {
+        state.chatStreamItemPrefix = payload.itemId
+          ? effectiveItemStart === undefined
+            ? continuesOffsetlessCumulative && accumulated.text
+              ? accumulated.text
+              : undefined
+            : next.slice(0, effectiveItemStart)
+          : undefined;
+      }
+      if (completedRolledTextEnd !== undefined) {
+        const completedSegments = [...streamSegments];
+        const completedSegment = completedSegments[rolledPartialIndex];
+        if (completedSegment) {
+          completedSegments[rolledPartialIndex] = {
+            ...completedSegment,
+            text: next.slice(0, completedRolledTextEnd),
+          };
+        }
+        state.chatStreamSegments = completedSegments;
+      }
       state.chatStream = next;
-      reconcilePersistedAssistantStream(state);
+      state.chatStreamItemId = preservesKeyedOwner ? offsetlessCumulativeOwner : payload.itemId;
+      state.chatStreamItemStartOffset = preservesKeyedOwner
+        ? state.chatStreamItemStartOffset
+        : payload.itemId
+          ? (producerItemStart ?? (!itemChanged ? state.chatStreamItemStartOffset : undefined))
+          : undefined;
+      if (payload.itemId) {
+        state.chatStreamRecoveredWithoutItemId = undefined;
+      }
+      const settledReplay = reconcilePersistedAssistantStream(state, payload.itemId);
+      if (!payload.itemId && settledReplay && state.chatStream !== null) {
+        state.chatStreamItemId = settledReplay.itemId;
+        state.chatStreamItemStartOffset = undefined;
+        state.chatStreamItemPrefix = settledReplay.prefix;
+      }
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizedFinalMessage;

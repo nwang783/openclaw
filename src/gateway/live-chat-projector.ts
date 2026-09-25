@@ -34,6 +34,20 @@ import {
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
+export type LiveAssistantBufferedProjection = {
+  text: string;
+  suppress: boolean;
+  itemId?: string;
+  itemStartOffset?: number;
+};
+
+export type LiveAssistantBufferDelta = {
+  deltaText: string;
+  itemId?: string;
+  itemStartOffset?: number;
+  replace?: true;
+};
+
 /** Cap live display text without letting later snapshots resurrect the retired prefix. */
 export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
   const { text, scope } = snapshot;
@@ -69,6 +83,37 @@ export function normalizeLiveAssistantBufferedText(
     options?.final ? normalized : stripPendingLiveAssistantTail(normalized),
     options?.managedMediaUrls ?? [],
   );
+}
+
+export function attachLiveAssistantItemScope<T extends { text: string; suppress: boolean }>(
+  projected: T,
+  scope: AssistantTextSnapshot["scope"] | undefined,
+  managedMediaUrls?: Iterable<string>,
+): T & Pick<LiveAssistantBufferedProjection, "itemId" | "itemStartOffset"> {
+  if (!scope) {
+    return projected;
+  }
+  const itemStartOffset = normalizeLiveAssistantBufferedText(
+    scope.prefix + "\n".repeat(scope.separatorLength),
+    { managedMediaUrls: managedMediaUrls ? [...managedMediaUrls] : undefined },
+  ).length;
+  return { ...projected, itemId: scope.itemId, itemStartOffset };
+}
+
+export function projectLiveAssistantBufferDelta(
+  projected: LiveAssistantBufferedProjection,
+  append: string | null,
+  text: string,
+): LiveAssistantBufferDelta | undefined {
+  if (append === "") {
+    return undefined;
+  }
+  return {
+    deltaText: append === null ? text : append,
+    itemId: projected.itemId,
+    itemStartOffset: projected.itemStartOffset,
+    ...(append === null ? { replace: true } : {}),
+  };
 }
 
 function stripPendingLiveAssistantTail(text: string): string {

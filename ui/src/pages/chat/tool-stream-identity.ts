@@ -13,7 +13,7 @@ type ToolMessageRef = {
   runId?: string;
 };
 
-type LiveToolStreamRef = ToolMessageRef & {
+export type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
 };
 
@@ -126,6 +126,36 @@ export function resolveMatchingLiveToolIdentity(
       liveRef.id === ref.id && (!ref.runId || !liveRef.runId || liveRef.runId === ref.runId),
   );
   return matches.length === 1 ? matches[0]?.identity : undefined;
+}
+
+export function nextUnclaimedToolForRun<T extends { runId?: string }>(
+  tools: readonly T[],
+  runId: string | undefined,
+  unavailable: (tool: T) => boolean,
+): T | undefined {
+  return tools.find(
+    (tool) => !unavailable(tool) && (!runId || !tool.runId || tool.runId === runId),
+  );
+}
+
+export function resolveExplicitLiveToolIdentities(
+  segments: readonly { runId?: unknown; toolCallId?: unknown }[],
+  liveToolRefs: LiveToolStreamRef[],
+): Set<string> {
+  return new Set(
+    segments.flatMap((segment) => {
+      const toolCallId = normalizeOptionalString(segment.toolCallId);
+      if (!toolCallId) {
+        return [];
+      }
+      const runId = normalizeOptionalString(segment.runId);
+      const identity = resolveMatchingLiveToolIdentity(
+        { id: toolCallId, ...(runId ? { runId } : {}) },
+        liveToolRefs,
+      );
+      return identity ? [identity] : [];
+    }),
+  );
 }
 
 export function persistedCurrentToolStreamIds(

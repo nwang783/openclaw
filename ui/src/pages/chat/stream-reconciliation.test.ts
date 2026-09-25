@@ -14,10 +14,10 @@ import {
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
-  discardStreamSegmentIndexes,
   pruneHistoryReplacedStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
+import { discardStreamSegmentIndexes } from "./stream-segment-retirement.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 
@@ -197,6 +197,64 @@ describe("stream reconciliation", () => {
     },
   );
 
+  it("prunes keyed cumulative chat when durable history replaces it", () => {
+    const persisted = {
+      role: "assistant",
+      content: "Done",
+      timestamp: 2,
+      __openclaw: { runId: "run-active" },
+      openclawStreamFallback: { source: "segment", itemId: "answer" },
+    };
+    const state = makeIdleStreamState({
+      chatRunId: "run-active",
+      chatStreamSegments: [
+        {
+          text: "Earlier\n\nDone",
+          ts: 1,
+          runId: "run-active",
+          itemId: "answer",
+          itemStartOffset: "Earlier\n\n".length,
+          cumulative: true as const,
+        },
+      ],
+    });
+
+    expect(
+      pruneHistoryReplacedStreamSegments([persisted], state, {
+        isHiddenAssistantMessage: () => false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toBe(true);
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
+      { text: "Earlier\n\n", runId: "run-active" },
+    ]);
+  });
+
+  it("retires zero-visible revisions with a foreign run's replaced item", () => {
+    const persisted = {
+      role: "assistant",
+      content: "Done",
+      timestamp: 2,
+      __openclaw: { runId: "run-old" },
+      openclawStreamFallback: { source: "segment", itemId: "answer" },
+    };
+    const repeated = {
+      text: "Done",
+      ts: 1,
+      runId: "run-old",
+      itemId: "answer",
+      itemStartOffset: 0,
+      cumulative: true as const,
+    };
+    const state = makeIdleStreamState({
+      chatRunId: "run-new",
+      chatStreamSegments: [repeated, { ...repeated, ts: 2 }],
+    });
+
+    expect(pruneHistoryReplacedStreamSegments([persisted], state, visibleStreamOptions)).toBe(true);
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toEqual([]);
+  });
+
   it("does not replay a keyed preamble across a same-run steer boundary", () => {
     const state = makeIdleStreamState({
       chatStreamSegments: [
@@ -332,6 +390,98 @@ describe("stream reconciliation", () => {
     ).toBe("Continued.");
   });
 
+  it("projects interleaved cumulative runs from their own baselines", () => {
+    const state = makeIdleStreamState({
+      chatStreamSegments: [
+        { text: "Hello", ts: 1, runId: "run-a", cumulative: true as const },
+        { text: "Sibling", ts: 2, runId: "run-b", cumulative: true as const },
+        { text: "Hello world", ts: 3, runId: "run-a", cumulative: true as const },
+      ],
+    });
+
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
+      { text: "Hello", runId: "run-a" },
+      { text: "Sibling", runId: "run-b" },
+      { text: "world", runId: "run-a" },
+    ]);
+  });
+
+  it("does not carry a producer offset into an offsetless successor item", () => {
+    const state = makeIdleStreamState({
+      chatStreamSegments: [
+        {
+          text: "P\n\nA",
+          ts: 1,
+          runId: "run-1",
+          itemId: "item-a",
+          itemStartOffset: "P\n\n".length,
+          producerItemStartOffset: "P\n\n".length,
+          cumulative: true as const,
+        },
+        { text: "B", ts: 2, runId: "run-1", itemId: "item-b", cumulative: true as const },
+        {
+          text: "B more",
+          ts: 3,
+          runId: "run-1",
+          itemId: "item-b",
+          itemStartOffset: 0,
+          producerItemStartOffset: 0,
+          cumulative: true as const,
+        },
+      ],
+    });
+
+    expect(
+      visibleAssistantStreamParts(state, visibleStreamOptions).map((part) => part.text),
+    ).toEqual(["P\n\nA", "B", "more"]);
+  });
+
+  it("retains an item prefix when a sibling run has the same cumulative baseline", () => {
+    const state = makeIdleStreamState({
+      chatRunId: "active-run",
+      chatStreamSegments: [
+        { text: "Earlier\n\n", ts: 1, runId: "sibling-run" },
+        {
+          text: "Earlier\n\nCurrent",
+          ts: 2,
+          runId: "active-run",
+          itemId: "current-item",
+          itemStartOffset: "Earlier\n\n".length,
+          cumulative: true as const,
+        },
+      ],
+    });
+
+    discardStreamSegmentIndexes(state, [1], "current-item");
+
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
+      { text: "Earlier\n\n", runId: "sibling-run" },
+      { text: "Earlier\n\n", runId: "active-run" },
+    ]);
+  });
+
+  it("retains a sibling run prefix when its item becomes durable", () => {
+    const state = makeIdleStreamState({
+      chatRunId: "active-run",
+      chatStreamSegments: [
+        {
+          text: "Earlier\n\nSaved",
+          ts: 1,
+          runId: "sibling-run",
+          itemId: "saved-item",
+          itemStartOffset: "Earlier\n\n".length,
+          cumulative: true as const,
+        },
+      ],
+    });
+
+    discardStreamSegmentIndexes(state, [0], "saved-item");
+
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
+      { text: "Earlier\n\n", runId: "sibling-run" },
+    ]);
+  });
+
   it("prunes only the persisted run when sibling tools share a call id", () => {
     const { state, toolCallId, foregroundIdentity, backgroundIdentity, foregroundMessage } =
       createConcurrentToolStreamState();
@@ -375,6 +525,69 @@ describe("stream reconciliation", () => {
     expect(state.toolStreamById.size).toBe(2);
     expect(state.chatToolMessages).toHaveLength(2);
     expect(state.chatStreamSegments).toHaveLength(2);
+  });
+
+  it("counts keyed cumulative segments in positional tool pruning", () => {
+    const runId = "run-1";
+    const firstIdentity = buildToolStreamIdentity(runId, "call-1");
+    const secondIdentity = buildToolStreamIdentity(runId, "call-2");
+    const state = makeIdleStreamState({
+      chatRunId: runId,
+      chatStreamSegments: [
+        {
+          text: "Before first",
+          ts: 1,
+          runId,
+          itemId: "commentary-1",
+          cumulative: true as const,
+          itemStartOffset: 0,
+        },
+        { text: "Before first\nBefore second", ts: 2, runId },
+      ],
+      toolStreamOrder: [firstIdentity, secondIdentity],
+      toolStreamById: new Map<string, unknown>([
+        [firstIdentity, { runId, toolCallId: "call-1" }],
+        [secondIdentity, { runId, toolCallId: "call-2" }],
+      ]),
+    });
+
+    expect(
+      visibleAssistantStreamParts(state, { ...visibleStreamOptions, includeCurrent: false })[0],
+    ).toMatchObject({ text: "Before first", toolCallId: "call-1" });
+
+    prunePersistedToolStreamMessages(state, new Set([firstIdentity]));
+
+    expect(state.chatStreamSegments?.[0]).toMatchObject({
+      itemId: "commentary-1",
+      persisted: true,
+    });
+    expect(state.chatStreamSegments?.[1]).toMatchObject({
+      text: "Before first\nBefore second",
+    });
+    expect(state.chatStreamSegments?.[1]).not.toHaveProperty("persisted");
+  });
+
+  it("advances positional tool pruning past an explicitly identified segment", () => {
+    const runId = "run-1";
+    const firstIdentity = buildToolStreamIdentity(runId, "call-1");
+    const secondIdentity = buildToolStreamIdentity(runId, "call-2");
+    const state = makeIdleStreamState({
+      chatRunId: runId,
+      chatStreamSegments: [
+        { text: "Before first", ts: 1, runId, toolCallId: "call-1" },
+        { text: "Before first\nBefore second", ts: 2, runId },
+      ],
+      toolStreamOrder: [firstIdentity, secondIdentity],
+      toolStreamById: new Map<string, unknown>([
+        [firstIdentity, { runId, toolCallId: "call-1" }],
+        [secondIdentity, { runId, toolCallId: "call-2" }],
+      ]),
+    });
+
+    prunePersistedToolStreamMessages(state, new Set([firstIdentity]));
+
+    expect(state.chatStreamSegments?.[0]).toHaveProperty("persisted", true);
+    expect(state.chatStreamSegments?.[1]).not.toHaveProperty("persisted");
   });
 
   it.each([

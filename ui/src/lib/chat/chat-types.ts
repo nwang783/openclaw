@@ -233,12 +233,30 @@ export type ChatStreamSegment = {
   boundaryRunId?: string;
   /** Ordering-only boundary with no renderable assistant text. */
   boundaryMarker?: true;
+  /** Keyed item captured from the producer's cumulative chat projection. */
+  cumulative?: true;
+  /** UTF-16 offset where this keyed item starts in cumulative text. */
+  itemStartOffset?: number;
+  /** Producer-reported offset distinguishing reused item-ID occurrences. */
+  producerItemStartOffset?: number;
+  /** Derived prefix to hide when a cumulative projection skips an earlier sibling item. */
+  displayStartOffset?: number;
+  /** Client-derived cumulative prefix; does not own a positional tool. */
+  syntheticItemPrefix?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
   /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
   retiredItemId?: string;
   /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
-  pendingCommentary?: { text: string; prefixLength: number };
+  pendingCommentary?: {
+    text: string;
+    prefixLength: number;
+    sourceMessageId?: string;
+    replayItemId?: string;
+    requiresReplayItemId?: boolean;
+  };
+  /** Earlier visible cumulative prefix preserved while a later commentary occurrence hands off. */
+  pendingCommentaryPrefixFor?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -247,11 +265,82 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
+export function streamSegmentIsSyntheticItemPrefix(
+  segment: ChatStreamSegment,
+  nextSegment: ChatStreamSegment | undefined,
+): boolean {
+  if (
+    segment.syntheticItemPrefix !== true ||
+    streamSegmentHasItemId(segment) ||
+    (typeof segment.toolCallId === "string" && segment.toolCallId.trim().length > 0) ||
+    nextSegment?.cumulative !== true ||
+    !streamSegmentHasItemId(nextSegment) ||
+    segment.runId !== nextSegment.runId ||
+    !Number.isInteger(nextSegment.itemStartOffset)
+  ) {
+    return false;
+  }
+  const prefix = nextSegment.text.slice(0, nextSegment.itemStartOffset);
+  return prefix === segment.text || prefix.replace(/(?:\r?\n){2}$/u, "") === segment.text;
+}
+
 export function streamSegmentUsesAccumulatedText(segment: {
   itemId?: unknown;
   boundaryMarker?: unknown;
+  cumulative?: unknown;
 }): boolean {
-  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
+  return (
+    segment.boundaryMarker !== true &&
+    (segment.cumulative === true || !streamSegmentHasItemId(segment))
+  );
+}
+
+export function streamSegmentResetsAccumulatedText(
+  segment: {
+    text: string;
+    itemStartOffset?: unknown;
+    producerItemStartOffset?: number;
+    itemId?: unknown;
+    runId?: unknown;
+    boundaryMarker?: unknown;
+    cumulative?: unknown;
+  },
+  previousItemId?: string,
+  previousText?: string | null,
+  previousRunId?: string,
+  previousItemStartOffset?: number,
+): boolean {
+  if (!streamSegmentUsesAccumulatedText(segment)) {
+    return false;
+  }
+  const runChanged =
+    typeof segment.runId === "string" &&
+    segment.runId.trim().length > 0 &&
+    segment.runId.trim() !== previousRunId;
+  if (runChanged) {
+    return true;
+  }
+  if (segment.cumulative === true && previousText && !segment.text.startsWith(previousText)) {
+    return true;
+  }
+  if (typeof segment.itemId !== "string") {
+    return false;
+  }
+  if (
+    segment.itemId.trim() === previousItemId &&
+    segment.producerItemStartOffset !== undefined &&
+    previousItemStartOffset !== undefined &&
+    segment.producerItemStartOffset !== previousItemStartOffset
+  ) {
+    return true;
+  }
+  if (previousText && !segment.text.startsWith(previousText)) {
+    return true;
+  }
+  return (
+    segment.itemId.trim() !== previousItemId &&
+    (segment.itemStartOffset === 0 || segment.itemStartOffset === undefined)
+  );
 }
 
 /** Advance the accumulated-text tracker only when the segment genuinely
@@ -262,11 +351,12 @@ export function streamSegmentUsesAccumulatedText(segment: {
 export function advanceAccumulatedStreamText(
   previousText: string | null,
   text: string,
+  reset = false,
 ): string | null {
   if (!text.trim()) {
     return previousText;
   }
-  return previousText === null || text.startsWith(previousText) ? text : previousText;
+  return reset || previousText === null || text.startsWith(previousText) ? text : previousText;
 }
 
 export function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
@@ -276,17 +366,251 @@ export function trimAccumulatedStreamPrefix(text: string, previousText: string |
   return text.slice(previousText.length).trimStart();
 }
 
+export function streamVisiblePrefix(
+  segment: ChatStreamSegment,
+  previousText: string | null,
+  previousUnkeyedText?: string,
+): string | null {
+  return (!streamSegmentHasItemId(segment) || segment.producerItemStartOffset === undefined) &&
+    previousUnkeyedText &&
+    segment.text.startsWith(previousUnkeyedText)
+    ? previousUnkeyedText
+    : previousText;
+}
+
+export function accumulatedStreamState(
+  segments: readonly ChatStreamSegment[],
+  normalize: (text: string) => string = (text) => text,
+  runId?: string | null,
+): { text: string | null; itemId?: string } {
+  let accumulated: string | null = null;
+  let accumulatedItemId: string | undefined;
+  let accumulatedItemStartOffset: number | undefined;
+  let accumulatedRunId: string | undefined;
+  let accumulatedUnkeyedText: string | undefined;
+  for (const segment of segments) {
+    if (runId && segment.runId && segment.runId !== runId) {
+      continue;
+    }
+    if (streamSegmentUsesAccumulatedText(segment)) {
+      const normalizedText = normalize(segment.text);
+      const previousVisibleText =
+        (!streamSegmentHasItemId(segment) || segment.producerItemStartOffset === undefined) &&
+        accumulatedUnkeyedText &&
+        normalizedText.startsWith(accumulatedUnkeyedText)
+          ? accumulatedUnkeyedText
+          : accumulated;
+      const inheritsUnkeyedText = previousVisibleText !== accumulated;
+      if (
+        !streamSegmentHasItemId(segment) &&
+        accumulated &&
+        !normalizedText.startsWith(accumulated)
+      ) {
+        accumulatedUnkeyedText = normalizedText;
+        accumulatedItemId = undefined;
+        accumulatedItemStartOffset = undefined;
+      }
+      accumulated = advanceAccumulatedStreamText(
+        previousVisibleText,
+        normalizedText,
+        !inheritsUnkeyedText &&
+          streamSegmentResetsAccumulatedText(
+            segment,
+            accumulatedItemId,
+            previousVisibleText,
+            accumulatedRunId,
+            accumulatedItemStartOffset,
+          ),
+      );
+      if (streamSegmentHasItemId(segment)) {
+        accumulatedUnkeyedText = undefined;
+      }
+      accumulatedItemId =
+        typeof segment.itemId === "string" && segment.itemId.trim()
+          ? segment.itemId.trim()
+          : accumulatedItemId;
+      accumulatedRunId =
+        typeof segment.runId === "string" && segment.runId.trim()
+          ? segment.runId.trim()
+          : accumulatedRunId;
+      accumulatedItemStartOffset = segment.producerItemStartOffset ?? accumulatedItemStartOffset;
+    } else if (streamSegmentHasItemId(segment)) {
+      accumulatedItemStartOffset = segment.producerItemStartOffset ?? accumulatedItemStartOffset;
+      accumulatedItemId = segment.itemId!.trim();
+      accumulatedRunId =
+        typeof segment.runId === "string" && segment.runId.trim()
+          ? segment.runId.trim()
+          : accumulatedRunId;
+    }
+  }
+  return {
+    text: accumulated,
+    ...(accumulatedItemId ? { itemId: accumulatedItemId } : {}),
+  };
+}
+
 export function accumulatedStreamText(
   segments: readonly ChatStreamSegment[],
   normalize: (text: string) => string = (text) => text,
+  runId?: string | null,
 ): string | null {
-  let accumulated: string | null = null;
+  return accumulatedStreamState(segments, normalize, runId).text;
+}
+
+export function accumulatedStreamTextForCurrent(
+  segments: readonly ChatStreamSegment[],
+  itemId: string | undefined,
+  normalize: (text: string) => string = (text) => text,
+  runId?: string | null,
+  currentText?: string,
+): string | null {
+  const accumulated = accumulatedStreamText(segments, normalize, runId);
+  if (itemId) {
+    return accumulated;
+  }
+  let unkeyed: string | null = null;
   for (const segment of segments) {
-    if (streamSegmentUsesAccumulatedText(segment)) {
-      accumulated = advanceAccumulatedStreamText(accumulated, normalize(segment.text));
+    if (
+      (runId && segment.runId && segment.runId !== runId) ||
+      !streamSegmentUsesAccumulatedText(segment)
+    ) {
+      continue;
+    }
+    const text = normalize(segment.text);
+    if (streamSegmentHasItemId(segment)) {
+      unkeyed = null;
+    } else if (
+      (unkeyed && text.startsWith(unkeyed)) ||
+      (accumulated && !text.startsWith(accumulated))
+    ) {
+      unkeyed = text;
     }
   }
-  return accumulated;
+  return unkeyed && currentText?.startsWith(unkeyed) ? unkeyed : accumulated;
+}
+
+export function accumulatedStreamTextForItem(
+  segments: readonly ChatStreamSegment[],
+  itemId: string | undefined,
+  normalize: (text: string) => string = (text) => text,
+  runId?: string | null,
+  itemStartOffset?: number,
+): string | null {
+  if (!itemId) {
+    return null;
+  }
+  let accumulated: string | null = null;
+  let accumulatedItemId: string | undefined;
+  let accumulatedItemStartOffset: number | undefined;
+  let accumulatedRunId: string | undefined;
+  for (const segment of segments) {
+    if (runId && segment.runId && segment.runId !== runId) {
+      continue;
+    }
+    if (!streamSegmentUsesAccumulatedText(segment)) {
+      if (streamSegmentHasItemId(segment)) {
+        accumulatedItemId = segment.itemId!.trim();
+        accumulatedItemStartOffset = segment.producerItemStartOffset ?? accumulatedItemStartOffset;
+        accumulatedRunId =
+          typeof segment.runId === "string" && segment.runId.trim()
+            ? segment.runId.trim()
+            : accumulatedRunId;
+      }
+      continue;
+    }
+    const ownerItemId = segment.itemId ?? segment.retiredItemId;
+    const normalizedText = normalize(segment.text);
+    if (
+      ownerItemId === itemId &&
+      itemStartOffset !== undefined &&
+      segment.producerItemStartOffset !== undefined &&
+      segment.producerItemStartOffset !== itemStartOffset
+    ) {
+      accumulated = null;
+      accumulatedItemId = undefined;
+      accumulatedItemStartOffset = undefined;
+      continue;
+    }
+    if (!ownerItemId && accumulated && !normalizedText.startsWith(accumulated)) {
+      accumulated = null;
+      accumulatedItemId = undefined;
+      accumulatedItemStartOffset = undefined;
+    }
+    if (
+      ownerItemId !== itemId &&
+      segment.persisted === true &&
+      accumulated?.startsWith(normalizedText)
+    ) {
+      accumulatedItemId = ownerItemId?.trim() || accumulatedItemId;
+      accumulatedItemStartOffset = segment.producerItemStartOffset ?? accumulatedItemStartOffset;
+      accumulatedRunId =
+        typeof segment.runId === "string" && segment.runId.trim()
+          ? segment.runId.trim()
+          : accumulatedRunId;
+      continue;
+    }
+    const resetsAccumulatedText = streamSegmentResetsAccumulatedText(
+      { ...segment, itemId: ownerItemId },
+      accumulatedItemId,
+      accumulated,
+      accumulatedRunId,
+      accumulatedItemStartOffset,
+    );
+    if (resetsAccumulatedText && segment.itemId !== itemId) {
+      accumulated = null;
+    }
+    if (ownerItemId === itemId) {
+      accumulated = advanceAccumulatedStreamText(
+        accumulated,
+        normalizedText,
+        resetsAccumulatedText,
+      );
+    }
+    accumulatedItemId = ownerItemId?.trim() || accumulatedItemId;
+    accumulatedItemStartOffset = segment.producerItemStartOffset ?? accumulatedItemStartOffset;
+    accumulatedRunId =
+      typeof segment.runId === "string" && segment.runId.trim()
+        ? segment.runId.trim()
+        : accumulatedRunId;
+  }
+  return accumulatedItemId === itemId ? accumulated : null;
+}
+
+export function resolveCurrentStreamPrefix(
+  accumulated: string | null,
+  itemId: string | undefined,
+  itemPrefix: string | undefined,
+  sameItemText: string | null = null,
+  currentText?: string,
+): string | null {
+  if (!itemId) {
+    return accumulated;
+  }
+  if (sameItemText) {
+    return itemPrefix && itemPrefix.startsWith(sameItemText) ? itemPrefix : sameItemText;
+  }
+  if (!itemPrefix || !accumulated) {
+    return null;
+  }
+  const completesParagraphSeparator =
+    itemPrefix.startsWith(accumulated) &&
+    /^(?:\r?\n)+$/u.test(itemPrefix.slice(accumulated.length)) &&
+    /(?:\r?\n){2}$/u.test(itemPrefix);
+  const startsAfterParagraphSeparator =
+    itemPrefix.startsWith(accumulated) &&
+    /^(?:\r?\n){2}/u.test(itemPrefix.slice(accumulated.length));
+  if (itemPrefix === accumulated || startsAfterParagraphSeparator || completesParagraphSeparator) {
+    if (completesParagraphSeparator) {
+      return itemPrefix;
+    }
+    return accumulated;
+  }
+  if (accumulated.startsWith(itemPrefix)) {
+    return currentText?.startsWith(itemPrefix) && !currentText.startsWith(accumulated)
+      ? itemPrefix
+      : accumulated;
+  }
+  return null;
 }
 
 /** A group of consecutive messages from the same role (Slack-style layout) */

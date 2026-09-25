@@ -6,10 +6,15 @@ import {
   type ChatGuardianNotice,
   type ChatItem,
   type MessageGroup,
-  accumulatedStreamText,
+  accumulatedStreamTextForCurrent,
+  accumulatedStreamTextForItem,
   advanceAccumulatedStreamText,
+  resolveCurrentStreamPrefix,
   streamSegmentHasItemId,
+  streamSegmentIsSyntheticItemPrefix,
+  streamSegmentResetsAccumulatedText,
   streamSegmentUsesAccumulatedText,
+  streamVisiblePrefix as visiblePrefix,
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
@@ -71,9 +76,14 @@ import {
   resolveRunInsertionBounds,
   transcriptRunId,
 } from "./chat-thread-run-identity.ts";
+import {
+  collectExplicitlyOwnedTools,
+  createChatThreadToolPlacement,
+} from "./chat-thread-tool-placement.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { latestPersistedSteerBoundary } from "./stream-causal-boundary.ts";
+import { previousStreamOwnersBySegment } from "./stream-commentary-matching.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -89,6 +99,9 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
+  streamItemId?: string;
+  streamItemStartOffset?: number;
+  streamItemPrefix?: string;
   streamStartedAt: number | null;
   showToolCalls: boolean;
   persistCommentary?: boolean;
@@ -407,14 +420,22 @@ export function buildChatItems(
     }
     latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
   }
-  const keyedSegments = segments.filter(streamSegmentHasItemId);
-  const indexedSegments = segments.filter(
-    (segment) => !streamSegmentHasItemId(segment) && segment.boundaryMarker !== true,
+  const keyedSegments = segments.filter(
+    (segment) => streamSegmentHasItemId(segment) && !streamSegmentUsesAccumulatedText(segment),
+  );
+  const indexedSegments = segments.filter(streamSegmentUsesAccumulatedText);
+  const syntheticItemPrefixes = new Set(
+    segments.filter((segment, index) =>
+      streamSegmentIsSyntheticItemPrefix(segment, segments[index + 1]),
+    ),
   );
   const toolLookup = createToolCallLookup<ChatProjection>();
   for (const tool of toolItems) {
     toolLookup.add(tool.runId, tool.callId, tool.projection);
   }
+  const explicitlyOwnedTools = collectExplicitlyOwnedTools(segments, (runId, toolCallId) =>
+    toolLookup.get(runId, toolCallId),
+  );
   // Empty user rows may have disappeared since canvas placement. Preserve the
   // earlier current-turn fallback, but resolve exact bounds over rendered rows.
   const projectionRunBounds = createRunTurnLookup(executionItems());
@@ -464,7 +485,12 @@ export function buildChatItems(
       toolAfterBoundaries.add(runId, callId, afterBoundaryRunId);
     }
   }
-  const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
+  const appendStreamSegment = (
+    segment: ChatStreamSegment,
+    key: string,
+    text: string,
+    predecessorKey?: string,
+  ) => {
     const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
     projections.push({
       item: {
@@ -477,54 +503,109 @@ export function buildChatItems(
         ...optionalBoundaryIdentity(afterBoundaryRunId ?? segment.runId),
       },
       bounds: resolveProjectionBounds(segment.runId, segment.boundaryRunId, afterBoundaryRunId),
+      ...(predecessorKey ? { predecessorKey } : {}),
     });
   };
-  let previousAccumulatedStreamText: string | null = null;
-  const maxLen = Math.max(indexedSegments.length, toolItems.length);
-  for (let i = 0; i < maxLen; i++) {
-    const segment = indexedSegments[i];
-    if (segment) {
-      const text = sanitizeStreamText(segment.text);
-      const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
-      const visibleText = usesAccumulatedText
-        ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
+  const previousAccumulatedStreamTextByRun = new Map<string | undefined, string | null>();
+  const unkeyedByRun = new Map<string | undefined, string>();
+  const previousAccumulatedItemIdByRun = new Map<string | undefined, string>();
+  const previousAccumulatedItemStartByRun = new Map<string | undefined, number>();
+  const previousOwnerBySegment = previousStreamOwnersBySegment(segments);
+  const {
+    emitAfterSegment: emitToolAfterSegment,
+    emitRemaining: emitRemainingTools,
+    previousToolKeyByRun: previousPositionalToolKeyByRun,
+    resolveSegmentTool,
+  } = createChatThreadToolPlacement({
+    afterBoundaryBySegment,
+    explicitlyOwnedTools,
+    projections,
+    resolveBounds: resolveProjectionBounds,
+    showToolCalls: props.showToolCalls,
+    syntheticItemPrefixes,
+    toolItems,
+    toolLookup,
+    toolAfterBoundaries,
+    toolBeforeBoundaries,
+  });
+  for (const [i, segment] of indexedSegments.entries()) {
+    const text = sanitizeStreamText(segment.text);
+    const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
+    const segmentItemId = normalizeOptionalString(segment.itemId);
+    const runId = normalizeOptionalString(segment.runId);
+    const toolCallId = normalizeOptionalString(segment.toolCallId);
+    const previousText = previousAccumulatedStreamTextByRun.get(runId) ?? null;
+    const previousVisibleText = visiblePrefix(segment, previousText, unkeyedByRun.get(runId));
+    const inheritsUnkeyedText = previousVisibleText !== previousText;
+    const previousOwner = previousOwnerBySegment.get(segment);
+    const resetsAccumulatedText =
+      !inheritsUnkeyedText &&
+      streamSegmentResetsAccumulatedText(
+        segment,
+        previousOwner ? previousOwner.itemId : previousAccumulatedItemIdByRun.get(runId),
+        previousVisibleText,
+        runId,
+        previousOwner
+          ? previousOwner.itemStartOffset
+          : previousAccumulatedItemStartByRun.get(runId),
+      );
+    const segmentPrefix =
+      usesAccumulatedText && resetsAccumulatedText
+        ? segment.displayStartOffset
+          ? text.slice(0, segment.displayStartOffset)
+          : null
+        : previousVisibleText;
+    const visibleText =
+      usesAccumulatedText && (!resetsAccumulatedText || segmentPrefix)
+        ? trimAccumulatedStreamPrefix(text, segmentPrefix)
         : text;
-      if (usesAccumulatedText) {
-        previousAccumulatedStreamText = advanceAccumulatedStreamText(
-          previousAccumulatedStreamText,
-          text,
-        );
-      }
-      if (visibleText.length > 0 && segment.persisted !== true) {
-        const streamKey = `stream-seg:${props.sessionKey}:${i}`;
-        appendStreamSegment(segment, streamKey, visibleText);
-        const tool = toolLookup.get(
-          normalizeOptionalString(segment.runId),
-          segment.toolCallId?.trim(),
-        );
-        if (tool) {
-          // Gateway and browser clocks can disagree. Keep the assistant text that
-          // introduced a tool causally before its card even when timestamps do not.
-          tool.predecessorKey = streamKey;
+    if (usesAccumulatedText) {
+      previousAccumulatedStreamTextByRun.set(
+        runId,
+        advanceAccumulatedStreamText(previousVisibleText, text, resetsAccumulatedText),
+      );
+      if (segmentItemId) {
+        unkeyedByRun.delete(runId);
+        previousAccumulatedItemIdByRun.set(runId, segmentItemId);
+        if (segment.producerItemStartOffset !== undefined) {
+          previousAccumulatedItemStartByRun.set(runId, segment.producerItemStartOffset);
         }
+      } else if (previousText && !text.startsWith(previousText)) {
+        unkeyedByRun.set(runId, text);
+        previousAccumulatedItemIdByRun.delete(runId);
+        previousAccumulatedItemStartByRun.delete(runId);
       }
     }
-    const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
-      const before = toolBeforeBoundaries.get(tool.runId, tool.callId);
-      const after = toolAfterBoundaries.get(tool.runId, tool.callId);
-      tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
-      projections.push(tool.projection);
+    if (visibleText.length > 0 && segment.persisted !== true) {
+      const streamKey = `stream-seg:${props.sessionKey}:${i}`;
+      appendStreamSegment(
+        segment,
+        streamKey,
+        visibleText,
+        previousPositionalToolKeyByRun.get(runId),
+      );
+      const tool = resolveSegmentTool(segment, runId, toolCallId);
+      emitToolAfterSegment(segment, streamKey, tool, runId);
+    } else if (toolCallId) {
+      emitToolAfterSegment(segment, undefined, toolLookup.get(runId, toolCallId), runId);
     }
   }
-  // Keyed commentary does not advance cumulative text and follows the indexed
-  // stream/tool pairs on timestamp ties.
+  emitRemainingTools(toolItems, explicitlyOwnedTools);
   for (const segment of keyedSegments) {
     const text = sanitizeStreamText(segment.text);
     if (text.length > 0) {
-      appendStreamSegment(segment, `stream-seg:${props.sessionKey}:${segment.itemId}`, text);
+      const streamKey = `stream-seg:${props.sessionKey}:${segment.itemId}`;
+      appendStreamSegment(segment, streamKey, text);
+      const runId = normalizeOptionalString(segment.runId);
+      emitToolAfterSegment(
+        segment,
+        streamKey,
+        toolLookup.get(runId, normalizeOptionalString(segment.toolCallId)),
+        runId,
+      );
     }
   }
+  emitRemainingTools(toolItems);
 
   for (const prompt of props.questionPrompts ?? []) {
     // Pending questions live in the composer dock. Their terminal summaries are
@@ -598,7 +679,25 @@ export function buildChatItems(
   };
   if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
-    const prefix = accumulatedStreamText(segments, sanitizeStreamText);
+    const prefix = resolveCurrentStreamPrefix(
+      accumulatedStreamTextForCurrent(
+        segments,
+        props.streamItemId,
+        sanitizeStreamText,
+        props.runId,
+        text,
+      ),
+      props.streamItemId,
+      props.streamItemPrefix,
+      accumulatedStreamTextForItem(
+        segments,
+        props.streamItemId,
+        sanitizeStreamText,
+        props.runId,
+        props.streamItemStartOffset,
+      ),
+      text,
+    );
     const visibleText = trimAccumulatedStreamPrefix(text, prefix);
     if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
       const liveProgress = resolveProgress();

@@ -355,7 +355,15 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.text) {
-    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    if (retainIfWithinBudget({ ...bounded, text: params.snapshot.text })) {
+      retainIfWithinBudget({
+        ...bounded,
+        ...(params.snapshot.itemId ? { itemId: params.snapshot.itemId } : {}),
+        ...(params.snapshot.itemStartOffset === undefined
+          ? {}
+          : { itemStartOffset: params.snapshot.itemStartOffset }),
+      });
+    }
   }
   return bounded;
 }

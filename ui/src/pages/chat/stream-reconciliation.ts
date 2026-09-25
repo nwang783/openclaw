@@ -10,10 +10,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  accumulatedStreamText,
+  accumulatedStreamTextForCurrent,
+  accumulatedStreamTextForItem,
   advanceAccumulatedStreamText,
+  resolveCurrentStreamPrefix,
+  streamSegmentIsSyntheticItemPrefix,
   streamSegmentHasItemId,
+  streamSegmentResetsAccumulatedText,
   streamSegmentUsesAccumulatedText,
+  streamVisiblePrefix,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -31,6 +36,8 @@ import {
 } from "./terminal-message-identity.ts";
 import {
   extractToolMessageRefs,
+  nextUnclaimedToolForRun,
+  resolveExplicitLiveToolIdentities,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
@@ -231,10 +238,14 @@ export function visibleAssistantStreamParts(
 ): VisibleAssistantStreamPart[] {
   const liveToolRefs = resolveLiveToolStreamRefs(state);
   const parts: VisibleAssistantStreamPart[] = [];
-  let previousText: string | null = null;
+  const previousTextByRun = new Map<string | undefined, string | null>();
+  const previousUnkeyedTextByRun = new Map<string | undefined, string>();
   const segments = Array.isArray(state.chatStreamSegments) ? state.chatStreamSegments : [];
-  let toolIndexedSegmentIndex = 0;
+  const explicitlyOwnedToolIds = resolveExplicitLiveToolIdentities(segments, liveToolRefs);
+  const consumedPositionalToolIds = new Set<string>();
   let latestBoundaryRunId: string | undefined;
+  const previousAccumulatedItemIdByRun = new Map<string | undefined, string>();
+  const previousAccumulatedItemStartByRun = new Map<string | undefined, number>();
   for (const [segmentIndex, segment] of segments.entries()) {
     if (!segment || typeof segment.text !== "string") {
       continue;
@@ -246,19 +257,60 @@ export function visibleAssistantStreamParts(
     const usesItemId = streamSegmentHasItemId(segment);
     const itemId =
       usesItemId && typeof segment.itemId === "string" ? segment.itemId.trim() : undefined;
-    const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
-    const segmentRunId = normalizeOptionalString(segment.runId) ?? indexedToolRef?.runId;
+    const isSyntheticItemPrefix = streamSegmentIsSyntheticItemPrefix(
+      segment,
+      segments[segmentIndex + 1],
+    );
+    const participatesInToolOrder =
+      streamSegmentUsesAccumulatedText(segment) &&
+      !isSyntheticItemPrefix &&
+      segment.boundaryMarker !== true &&
+      segment.persisted !== true;
+    const explicitRunId = normalizeOptionalString(segment.runId);
+    const indexedToolRef =
+      participatesInToolOrder && !explicitToolCallId
+        ? nextUnclaimedToolForRun(
+            liveToolRefs,
+            explicitRunId,
+            (ref) =>
+              explicitlyOwnedToolIds.has(ref.identity) ||
+              consumedPositionalToolIds.has(ref.identity),
+          )
+        : undefined;
+    const segmentRunId = explicitRunId ?? indexedToolRef?.runId;
     const afterBoundaryRunId =
       normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
     const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    if (!usesItemId && segment.boundaryMarker !== true && segment.persisted !== true) {
-      toolIndexedSegmentIndex += 1;
-    }
     const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
+    const previousText = previousTextByRun.get(segmentRunId) ?? null;
+    const previousUnkeyedText = previousUnkeyedTextByRun.get(segmentRunId);
+    const previousVisibleText = streamVisiblePrefix(segment, previousText, previousUnkeyedText);
+    const inheritsUnkeyedText = previousVisibleText !== previousText;
+    const previousAccumulatedItemId = previousAccumulatedItemIdByRun.get(segmentRunId);
+    const resetsAccumulatedText =
+      !inheritsUnkeyedText &&
+      streamSegmentResetsAccumulatedText(
+        segment,
+        previousAccumulatedItemId,
+        previousVisibleText,
+        segmentRunId,
+        previousAccumulatedItemStartByRun.get(segmentRunId),
+      );
+    const segmentPrefix =
+      usesAccumulatedText && resetsAccumulatedText
+        ? segment.displayStartOffset
+          ? segment.text.slice(0, segment.displayStartOffset)
+          : null
+        : previousVisibleText;
     const visible = visibleAssistantStreamText(
-      usesAccumulatedText ? trimAccumulatedStreamPrefix(segment.text, previousText) : segment.text,
+      usesAccumulatedText && (!resetsAccumulatedText || segmentPrefix)
+        ? trimAccumulatedStreamPrefix(segment.text, segmentPrefix)
+        : segment.text,
       opts.isHiddenStreamText,
     );
+    if (visible && indexedToolRef) {
+      consumedPositionalToolIds.add(indexedToolRef.identity);
+    }
     if (visible && segment.persisted !== true) {
       parts.push({
         text: visible,
@@ -275,15 +327,57 @@ export function visibleAssistantStreamParts(
       });
     }
     if (usesAccumulatedText) {
-      previousText = advanceAccumulatedStreamText(previousText, segment.text);
+      previousTextByRun.set(
+        segmentRunId,
+        advanceAccumulatedStreamText(previousVisibleText, segment.text, resetsAccumulatedText),
+      );
+      if (itemId) {
+        previousUnkeyedTextByRun.delete(segmentRunId);
+        previousAccumulatedItemIdByRun.set(segmentRunId, itemId);
+        if (segment.producerItemStartOffset !== undefined) {
+          previousAccumulatedItemStartByRun.set(segmentRunId, segment.producerItemStartOffset);
+        } else if (previousAccumulatedItemId !== itemId) {
+          previousAccumulatedItemStartByRun.delete(segmentRunId);
+        }
+      } else if (previousText && !segment.text.startsWith(previousText)) {
+        previousUnkeyedTextByRun.set(segmentRunId, segment.text);
+        previousAccumulatedItemIdByRun.delete(segmentRunId);
+        previousAccumulatedItemStartByRun.delete(segmentRunId);
+      }
+    } else if (itemId) {
+      previousAccumulatedItemIdByRun.set(segmentRunId, itemId);
+      if (segment.producerItemStartOffset === undefined) {
+        previousAccumulatedItemStartByRun.delete(segmentRunId);
+      } else {
+        previousAccumulatedItemStartByRun.set(segmentRunId, segment.producerItemStartOffset);
+      }
     }
     if (boundaryRunId) {
       latestBoundaryRunId = boundaryRunId;
     }
   }
   if (opts.includeCurrent !== false && typeof state.chatStream === "string") {
+    const currentPrefix = resolveCurrentStreamPrefix(
+      accumulatedStreamTextForCurrent(
+        segments,
+        state.chatStreamItemId,
+        (text) => text,
+        state.chatRunId,
+        state.chatStream,
+      ),
+      state.chatStreamItemId,
+      state.chatStreamItemPrefix,
+      accumulatedStreamTextForItem(
+        segments,
+        state.chatStreamItemId,
+        (text) => text,
+        state.chatRunId,
+        state.chatStreamItemStartOffset,
+      ),
+      state.chatStream,
+    );
     const visible = visibleAssistantStreamText(
-      trimAccumulatedStreamPrefix(state.chatStream, previousText),
+      trimAccumulatedStreamPrefix(state.chatStream, currentPrefix),
       opts.isHiddenStreamText,
     );
     if (visible) {
@@ -292,6 +386,7 @@ export function visibleAssistantStreamParts(
         replacementText: state.chatStream,
         source: "current",
         timestamp: state.chatStreamStartedAt ?? Date.now(),
+        ...(state.chatStreamItemId ? { itemId: state.chatStreamItemId } : {}),
         ...(state.chatRunId ? { runId: state.chatRunId } : {}),
         ...(latestBoundaryRunId ? { afterBoundaryRunId: latestBoundaryRunId } : {}),
       });
@@ -308,7 +403,25 @@ export function visibleCurrentAssistantStreamTail(
     return null;
   }
   const segments = Array.isArray(state.chatStreamSegments) ? state.chatStreamSegments : [];
-  const previousText = accumulatedStreamText(segments);
+  const previousText = resolveCurrentStreamPrefix(
+    accumulatedStreamTextForCurrent(
+      segments,
+      state.chatStreamItemId,
+      (text) => text,
+      state.chatRunId,
+      state.chatStream ?? undefined,
+    ),
+    state.chatStreamItemId,
+    state.chatStreamItemPrefix,
+    accumulatedStreamTextForItem(
+      segments,
+      state.chatStreamItemId,
+      (text) => text,
+      state.chatRunId,
+      state.chatStreamItemStartOffset,
+    ),
+    state.chatStream,
+  );
   return visibleAssistantStreamText(
     trimAccumulatedStreamPrefix(state.chatStream, previousText),
     isHiddenStreamText,

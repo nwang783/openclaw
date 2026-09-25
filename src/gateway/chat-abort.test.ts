@@ -9,6 +9,7 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
+  projectInFlightRunSnapshot,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
   resolveChatRunExpiresAtMs,
@@ -768,6 +769,19 @@ describe("resolveInFlightRunSnapshot", () => {
       sessionKey: "s",
     });
     expect(result).toEqual({ runId: "run-1", text: "partial answer so far", startedAt: 1_234 });
+  });
+
+  it("carries the current assistant item boundary in the recovery snapshot", () => {
+    const chatRunState = createChatRunState();
+    chatRunState.updateBuffer("run-1", { itemId: "commentary-1", delta: "Earlier" });
+    chatRunState.updateBuffer("run-1", { itemId: "commentary-2", delta: "Current" });
+
+    expect(projectInFlightRunSnapshot({ chatRunState, runId: "run-1" })).toMatchObject({
+      runId: "run-1",
+      text: "Earlier\n\nCurrent",
+      itemId: "commentary-2",
+      itemStartOffset: "Earlier\n\n".length,
+    });
   });
 
   it("returns the active run plan snapshot with buffered text", () => {

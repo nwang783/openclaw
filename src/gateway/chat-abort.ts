@@ -54,6 +54,8 @@ export type RestartRecoveryCandidate = {
 export type InFlightRunSnapshot = {
   runId: string;
   text: string;
+  itemId?: string;
+  itemStartOffset?: number;
   startedAt?: number;
   /**
    * True when the in-flight run is owned by the embedded-run registry and can
@@ -73,15 +75,15 @@ export function projectInFlightRunSnapshot(params: {
   sessionAbortable?: boolean;
 }): InFlightRunSnapshot {
   const run = params.chatRunState.runs.get(params.runId);
-  const projected = projectLiveAssistantBufferedText(
-    params.chatRunState.resolveBuffer(params.runId).text,
-    { suppressLeadFragments: true },
-  );
+  const buffer = params.chatRunState.resolveBuffer(params.runId);
+  const projected = projectLiveAssistantBufferedText(buffer.text, { suppressLeadFragments: true });
   const plan = run?.planSnapshot;
   const events = run?.progressSnapshot?.events;
   return {
     runId: params.runId,
     text: projected.suppress ? "" : projected.text,
+    ...(buffer.itemId ? { itemId: buffer.itemId } : {}),
+    ...(buffer.itemStartOffset === undefined ? {} : { itemStartOffset: buffer.itemStartOffset }),
     ...(params.startedAtMs === undefined ? {} : { startedAt: params.startedAtMs }),
     ...(params.sessionAbortable ? { sessionAbortable: true } : {}),
     ...(plan ? { plan } : {}),

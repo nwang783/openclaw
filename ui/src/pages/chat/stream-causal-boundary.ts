@@ -5,7 +5,9 @@ import {
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  accumulatedStreamText,
   advanceAccumulatedStreamText,
+  streamSegmentResetsAccumulatedText,
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
@@ -15,6 +17,9 @@ import { userTurnRunId } from "./chat-thread-items.ts";
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
   chatRunId?: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
+  chatStreamItemPrefix?: string;
   chatStreamSegments?: ChatStreamSegment[];
 };
 
@@ -22,6 +27,9 @@ type StreamRolloverState = {
   chatMessages?: unknown[];
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
+  chatStreamItemPrefix?: string;
   chatStreamStartedAt: number | null;
   chatStreamSegments?: ChatStreamSegment[];
 };
@@ -422,15 +430,31 @@ export function reconcileTerminalStreamBoundary(
     return { kind: "none" };
   }
   let accumulatedText: string | null = null;
+  let accumulatedItemId: string | undefined;
+  let accumulatedItemStartOffset: number | undefined;
+  let accumulatedRunId: string | undefined;
   const accumulatedSegmentIndexes: number[] = [];
   let liveBoundary: (TerminalBoundaryCandidate & { segmentIndexes: number[] }) | null = null;
   for (const [segmentIndex, segment] of (state.chatStreamSegments ?? []).entries()) {
     if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
-      const nextAccumulatedText = advanceAccumulatedStreamText(accumulatedText, segment.text);
+      const nextAccumulatedText = advanceAccumulatedStreamText(
+        accumulatedText,
+        segment.text,
+        streamSegmentResetsAccumulatedText(
+          segment,
+          accumulatedItemId,
+          accumulatedText,
+          accumulatedRunId,
+          accumulatedItemStartOffset,
+        ),
+      );
       if (nextAccumulatedText !== accumulatedText) {
         accumulatedSegmentIndexes.push(segmentIndex);
       }
       accumulatedText = nextAccumulatedText;
+      accumulatedItemId = normalizeOptionalString(segment.itemId) ?? accumulatedItemId;
+      accumulatedItemStartOffset = segment.producerItemStartOffset ?? accumulatedItemStartOffset;
+      accumulatedRunId = normalizeOptionalString(segment.runId) ?? accumulatedRunId;
     }
     const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
     if (boundaryRunId && accumulatedText) {
@@ -517,6 +541,7 @@ export function rolloverChatStream(
     toolCallId?: string;
     persisted?: true;
     timestamp?: number;
+    nextItemPrefix?: string;
   },
 ): void {
   if (host.chatRunId !== options.runId) {
@@ -542,13 +567,63 @@ export function rolloverChatStream(
         : { ...segment, boundaryRunId: streamBoundaryRunId },
     );
   }
+  const accumulated = accumulatedStreamText(segments, (text) => text, options.runId);
+  const displayStartOffset =
+    accumulated &&
+    host.chatStreamItemPrefix &&
+    host.chatStream?.startsWith(host.chatStreamItemPrefix) &&
+    !host.chatStream.startsWith(accumulated) &&
+    accumulated.startsWith(host.chatStreamItemPrefix)
+      ? host.chatStreamItemPrefix.length
+      : undefined;
+  const completedPrefix = options.nextItemPrefix?.replace(/(?:\r?\n){2}$/u, "");
+  const currentSeparatorCount = host.chatStream?.match(/(?:\r?\n){2}/gu)?.length ?? 0;
+  const firstUnownedSeparator = completedPrefix
+    ? [...completedPrefix.matchAll(/(?:\r?\n){2}/gu)][currentSeparatorCount]
+    : undefined;
+  const completedItemPrefix =
+    completedPrefix && firstUnownedSeparator?.index !== undefined
+      ? completedPrefix.slice(0, firstUnownedSeparator.index)
+      : completedPrefix;
+  const streamText =
+    hasStreamText && completedItemPrefix?.startsWith(host.chatStream ?? "")
+      ? completedItemPrefix
+      : host.chatStream;
+  if (
+    hasStreamText &&
+    host.chatStreamItemPrefix &&
+    advanceAccumulatedStreamText(accumulated, host.chatStreamItemPrefix) !== accumulated
+  ) {
+    segments = [
+      ...segments,
+      {
+        text: host.chatStreamItemPrefix,
+        ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
+        runId: options.runId,
+        syntheticItemPrefix: true,
+      },
+    ];
+  }
   if (hasStreamText) {
     segments = [
       ...segments,
       {
-        text: host.chatStream ?? "",
+        text: streamText ?? "",
         ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
         runId: options.runId,
+        ...(host.chatStreamItemId
+          ? {
+              itemId: host.chatStreamItemId,
+              cumulative: true as const,
+              ...(host.chatStreamItemPrefix === undefined
+                ? {}
+                : { itemStartOffset: host.chatStreamItemPrefix.length }),
+              ...(host.chatStreamItemStartOffset === undefined
+                ? {}
+                : { producerItemStartOffset: host.chatStreamItemStartOffset }),
+              ...(displayStartOffset === undefined ? {} : { displayStartOffset }),
+            }
+          : {}),
         ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
         ...(streamBoundaryRunId ? { boundaryRunId: streamBoundaryRunId } : {}),
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
@@ -579,6 +654,9 @@ export function rolloverChatStream(
     return;
   }
   host.chatStream = null;
+  host.chatStreamItemId = undefined;
+  host.chatStreamItemStartOffset = undefined;
+  host.chatStreamItemPrefix = undefined;
   // The closed segment owns elapsed time; a later cumulative tail must not restart the run clock.
   host.chatStreamStartedAt = null;
 }

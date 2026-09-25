@@ -73,6 +73,8 @@ function connect(
       message?: unknown;
       data?: { text?: string; delta?: string };
       state?: string;
+      itemId?: string;
+      itemStartOffset?: number;
     };
   }> = [];
   const socket = Object.assign(new EventEmitter(), {
@@ -198,7 +200,12 @@ it("sends append-only wire text while retaining snapshots for observers and late
     const late = connect(clients, "late");
     emit(2, undefined, " world");
     expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
-      expect.objectContaining({ message: expect.any(Object), deltaText: "Hello" }),
+      expect.objectContaining({
+        message: expect.any(Object),
+        deltaText: "Hello",
+        itemId: "answer",
+        itemStartOffset: 0,
+      }),
       expect.not.objectContaining({ message: expect.anything() }),
     ]);
     expect(frames.findLast((frame) => frame.event === "agent")?.payload.data).toEqual({
@@ -220,9 +227,18 @@ it("sends append-only wire text while retaining snapshots for observers and late
     visible = false;
     emit(4, "Reset", undefined);
     visible = true;
-    emit(5, "Reset!", "!");
-    expect(frames.findLast((frame) => frame.event === "agent")?.payload.data?.text).toBe("Reset!");
+    emit(5, "Reset! [[reply_to_current]]", "! [[reply_to_current]]");
+    expect(frames.findLast((frame) => frame.event === "agent")?.payload.data?.text).toBe(
+      "Reset! [[reply_to_current]]",
+    );
+    expect(frames.findLast((frame) => frame.event === "chat")?.payload.message).toMatchObject({
+      content: [{ type: "text", text: "Reset! " }],
+    });
     emit(6, "Other", "Other", undefined, "other");
+    expect(frames.findLast((frame) => frame.event === "chat")?.payload).toMatchObject({
+      itemId: "other",
+      itemStartOffset: "Reset! \n\n".length,
+    });
     emit(7, "Reset! again", " again");
     expect(frames.findLast((frame) => frame.event === "agent")?.payload.data?.text).toBe(
       "Reset! again",
@@ -230,7 +246,7 @@ it("sends append-only wire text while retaining snapshots for observers and late
     emitLifecycleEnd(handler, "wire-run", 8);
     expect(frames.at(-1)?.payload).toMatchObject({
       state: "final",
-      message: { content: [{ type: "text", text: "Reset!\n\nOther\n\nReset! again" }] },
+      message: { content: [{ type: "text", text: "Reset! \n\nOther\n\nReset! again" }] },
     });
     expect(chatOnly.map(({ event, payload }) => ({ event, payload }))).toEqual(
       frames

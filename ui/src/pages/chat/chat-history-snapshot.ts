@@ -43,6 +43,8 @@ export type ChatHistoryResult = {
   inFlightRun?: {
     runId: string;
     text?: string;
+    itemId?: string;
+    itemStartOffset?: number;
     startedAt?: number;
     sessionAbortable?: boolean;
     events?: AgentEventPayload[];

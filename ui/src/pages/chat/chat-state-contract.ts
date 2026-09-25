@@ -67,6 +67,14 @@ export type ChatState = StreamCausalBoundaryState & {
   providerPolicyNotice?: ProviderPolicyNotice | null;
   /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
+  /** Assistant item that owns the current cumulative chat delta, when identified. */
+  chatStreamItemId?: string;
+  /** Producer-reported start offset for the current assistant item occurrence. */
+  chatStreamItemStartOffset?: number;
+  /** Cumulative baseline observed when chatStreamItemId first took ownership. */
+  chatStreamItemPrefix?: string;
+  /** Fresh history restored text after its optional item boundary was budgeted out. */
+  chatStreamRecoveredWithoutItemId?: true;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;

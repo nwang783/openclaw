@@ -10,10 +10,11 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory,
   createState,
+  failedHistory,
+  renderedText,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
@@ -42,49 +43,6 @@ async function loadHistoryWithBrowserTimers(state: TestState): Promise<void> {
       Reflect.deleteProperty(globalWithWindow, "window");
     }
   }
-}
-
-function renderedText(state: TestState) {
-  return buildChatItems({
-    paneId: "steer-regression",
-    sessionKey: state.sessionKey,
-    runId: state.chatRunId,
-    messages: state.chatMessages,
-    toolMessages: state.chatToolMessages,
-    streamSegments: state.chatStreamSegments,
-    stream: state.chatStream,
-    streamStartedAt: state.chatStreamStartedAt,
-    showToolCalls: true,
-  }).flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.map(({ message }) => extractText(message)?.trim())
-      : item.kind === "stream"
-        ? [item.text.trim()]
-        : [],
-  );
-}
-
-function failedHistory(): ChatHistoryResult {
-  return {
-    messages: [
-      {
-        role: "user",
-        content: [{ type: "text", text: "Inspect the unavailable project" }],
-        timestamp: 1,
-        __openclaw: { id: "first-user", idempotencyKey: "run-first:user", seq: 1 },
-      },
-    ],
-    sessionInfo: {
-      key: "main",
-      kind: "direct",
-      updatedAt: 2,
-      status: "failed",
-      hasActiveRun: false,
-      lastRunId: "run-first",
-      lastRunError:
-        "ProjectCloneError: Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-    },
-  };
 }
 
 describe("chat history in-flight assistant recovery", () => {
@@ -315,6 +273,51 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatStream).toBe("The response survived the reconnect.");
     expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
     expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-reconnected" });
+  });
+
+  it("continues a keyed item after restoring its active snapshot", async () => {
+    const history = activeHistory("run-reconnected");
+    history.messages = [{ role: "user", content: "Continue working." }];
+    const restored = "The response survived the reconnect.";
+    const continued = `${restored} Still streaming.`;
+    Object.assign(history.inFlightRun!, { text: restored, itemId: "c1", itemStartOffset: 0 });
+    const state = createState(history);
+
+    await loadChatHistory(state);
+    handleChatGatewayEvent(state, {
+      runId: "run-reconnected",
+      sessionKey: state.sessionKey,
+      seq: 2,
+      state: "delta",
+      itemId: "c1",
+      itemStartOffset: 0,
+      message: { role: "assistant", content: continued },
+    });
+
+    expect(renderedText(state)).toEqual(["Continue working.", continued]);
+  });
+
+  it("continues a later keyed item inside a restored cumulative snapshot", async () => {
+    const history = activeHistory("run-reconnected");
+    history.messages = [{ role: "user", content: "Continue working." }];
+    const prefix = "An earlier item.\n\n";
+    const restored = `${prefix}The current item.`;
+    const continued = `${restored} Still streaming.`;
+    history.inFlightRun!.text = restored;
+    const state = createState(history);
+
+    await loadChatHistory(state);
+    handleChatGatewayEvent(state, {
+      runId: "run-reconnected",
+      sessionKey: state.sessionKey,
+      seq: 2,
+      state: "delta",
+      itemId: "commentary-2",
+      itemStartOffset: prefix.length,
+      message: { role: "assistant", content: continued },
+    });
+
+    expect(renderedText(state)).toEqual(["Continue working.", restored, "Still streaming."]);
   });
 
   it("restores the authoritative run start even before assistant text exists", async () => {

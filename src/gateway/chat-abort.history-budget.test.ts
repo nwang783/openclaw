@@ -43,3 +43,18 @@ it.each([2, 50])("keeps the newest %i progress events with bounded serialization
   expect(JSON.stringify(snapshot)).toBe(original);
   expect(serializedBytes).toBeLessThan(inputBytes * 3);
 });
+
+it("keeps fitting in-flight text when its optional item boundary exceeds the budget", () => {
+  const text = "recoverable assistant text";
+  const textOnly = { runId: "run-budget", text };
+  const snapshot = {
+    ...textOnly,
+    itemId: "commentary-boundary-that-does-not-fit",
+    itemStartOffset: 0,
+  };
+  const maxBytes = Buffer.byteLength(JSON.stringify([textOnly]));
+
+  expect(boundInFlightRunSnapshotForChatHistory({ snapshot, messages: [], maxBytes })).toEqual(
+    textOnly,
+  );
+});

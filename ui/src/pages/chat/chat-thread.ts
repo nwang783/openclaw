@@ -1,6 +1,8 @@
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
-  accumulatedStreamText,
+  accumulatedStreamTextForCurrent,
+  accumulatedStreamTextForItem,
+  resolveCurrentStreamPrefix,
   trimAccumulatedStreamPrefix,
   type ChatItem,
   type MessageGroup,
@@ -278,6 +280,8 @@ function sameChatItemsStructuralInput(
     previous.toolMessages === next.toolMessages &&
     previous.guardianNotices === next.guardianNotices &&
     previous.streamSegments === next.streamSegments &&
+    previous.streamItemId === next.streamItemId &&
+    previous.streamItemPrefix === next.streamItemPrefix &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.initialTurnId === next.initialTurnId &&
@@ -362,7 +366,25 @@ export function buildCachedChatItems(
       : {
           index: liveStreamIndex,
           identity: liveStreamIdentity(input),
-          prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+          prefix: resolveCurrentStreamPrefix(
+            accumulatedStreamTextForCurrent(
+              input.streamSegments,
+              input.streamItemId,
+              sanitizeStreamText,
+              input.runId,
+              input.stream === null ? undefined : sanitizeStreamText(input.stream),
+            ),
+            input.streamItemId,
+            input.streamItemPrefix,
+            accumulatedStreamTextForItem(
+              input.streamSegments,
+              input.streamItemId,
+              sanitizeStreamText,
+              input.runId,
+              input.streamItemStartOffset,
+            ),
+            input.stream === null ? undefined : sanitizeStreamText(input.stream),
+          ),
         };
   return items;
 }

@@ -329,7 +329,36 @@ export function applyHistoryRun(params: {
           activeStreamBeforeReset,
         )
       : activeStreamBeforeReset;
-  state.chatStream = mergeInFlightAssistantText(resolveInFlightAssistantText(run.text), liveText);
+  const snapshotText = resolveInFlightAssistantText(run.text);
+  state.chatStream = mergeInFlightAssistantText(snapshotText, liveText);
+  const liveRunProjectionAdvanced = !runProjectionsUnchanged(
+    previousRunProjections,
+    runProjectionsBeforeApply,
+  );
+  const snapshotOwnsMergedText =
+    snapshotText !== null &&
+    state.chatStream === snapshotText &&
+    (snapshotText !== activeStreamBeforeReset ||
+      (Boolean(run.itemId?.trim()) &&
+        run.itemId?.trim() !== state.chatStreamItemId &&
+        !liveRunProjectionAdvanced));
+  if (!retainsLiveStream || snapshotOwnsMergedText) {
+    const itemStartOffset =
+      Number.isInteger(run.itemStartOffset) &&
+      (run.itemStartOffset ?? -1) >= 0 &&
+      (run.itemStartOffset ?? Number.POSITIVE_INFINITY) <= (state.chatStream?.length ?? 0)
+        ? run.itemStartOffset
+        : undefined;
+    state.chatStreamItemId = run.itemId?.trim() || undefined;
+    state.chatStreamItemStartOffset = state.chatStreamItemId ? itemStartOffset : undefined;
+    state.chatStreamItemPrefix = state.chatStreamItemId
+      ? itemStartOffset === undefined
+        ? undefined
+        : state.chatStream?.slice(0, itemStartOffset)
+      : undefined;
+    state.chatStreamRecoveredWithoutItemId =
+      state.chatStream && !state.chatStreamItemId ? true : undefined;
+  }
   state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
   // A retained pane gets its boundary from session.message. Only fresh adoption
   // reconstructs it from history, with the persisted prefix as cumulative evidence.
