@@ -612,9 +612,6 @@ export async function runManagerTurn(params: {
             }
           }
         }
-        if (retryFreshHandle) {
-          continue;
-        }
       }
     }
   } finally {
