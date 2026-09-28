@@ -23,7 +23,7 @@ const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 4 * 60_000;
 export function createWorkerWorkspaceQuiescence(params: {
   ownerSignal: AbortSignal;
   sharedHost: boolean;
-  nativeWatchdog?: true;
+  nativeWatchdog?: () => Promise<boolean>;
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
 }): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
   return async (remoteWorkspaceDir) => {
@@ -36,14 +36,15 @@ export function createWorkerWorkspaceQuiescence(params: {
       throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
+    // Pin one dialect for the lease; a reconnect must not reinterpret its nonce/custody.
+    const nativeWatchdog = (await params.nativeWatchdog?.()) ?? false;
+    params.ownerSignal.throwIfAborted();
     const nativeNonce = randomBytes(16).toString("hex");
     const run = async (argv: string[], operation: NodeWorkerWorkspaceQuiescenceInput) => {
       const result = await params.runWorkspaceCommand({
         transportRetry: "never",
-        argv: params.nativeWatchdog
-          ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir]
-          : argv,
-        ...(params.nativeWatchdog ? { quiescence: operation } : {}),
+        argv: nativeWatchdog ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir] : argv,
+        ...(nativeWatchdog ? { quiescence: operation } : { legacyQuiescence: true }),
       });
       if (!workerWorkspaceCommandSucceeded(result)) {
         throw workspaceSyncError(result);
@@ -62,7 +63,7 @@ export function createWorkerWorkspaceQuiescence(params: {
       { action: "acquire", nonce: nativeNonce, timeoutMs: WORKSPACE_QUIESCENCE_TIMEOUT_MS },
     );
     const acknowledgement = /^quiesced ([a-f0-9]{32})$/u.exec(result.stdout.trim());
-    if (!acknowledgement || (params.nativeWatchdog && acknowledgement[1] !== nativeNonce)) {
+    if (!acknowledgement || (nativeWatchdog && acknowledgement[1] !== nativeNonce)) {
       throw new Error("Worker workspace quiescence returned an invalid acknowledgement");
     }
     const nonce = acknowledgement[1]!;

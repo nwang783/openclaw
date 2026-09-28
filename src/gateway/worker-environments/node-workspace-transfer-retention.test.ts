@@ -90,12 +90,21 @@ it.each([
       ownerEpoch,
       sessionId,
       ownerSignal: owner.signal,
+      supportsNativeQuiescence: async () => process.platform === "linux",
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       runWorkspaceCommand: (command) =>
         runtime.exec(
           {
             ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
             argv: [...command.argv],
             gatewayNamespace: "gateway-input-test",
             environmentId,
@@ -409,6 +418,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       ownerEpoch,
       sessionId,
       ownerSignal: owner.signal,
+      supportsNativeQuiescence: async () => process.platform === "linux",
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       restoredWorkspace,
@@ -416,6 +426,14 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         runtime.exec(
           {
             ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
             argv: [...command.argv],
             gatewayNamespace: "gateway-restart-test",
             environmentId,

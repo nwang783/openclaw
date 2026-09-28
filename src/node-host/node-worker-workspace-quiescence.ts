@@ -45,11 +45,12 @@ type Lease = {
 /** Infrastructure leases outlive commands and environment-owned preview processes. */
 export class NodeWorkerWorkspaceQuiescence {
   private readonly leases = new Map<string, Lease>();
+  private readonly controls = new Set<Promise<void>>();
   private readonly supervisor = getProcessSupervisor();
   private closed = false;
 
   hasActiveWork(): boolean {
-    return this.leases.size > 0;
+    return this.leases.size > 0 || this.controls.size > 0;
   }
 
   async execute(context: LeaseContext, signal?: AbortSignal): Promise<string> {
@@ -116,9 +117,10 @@ export class NodeWorkerWorkspaceQuiescence {
 
   async close(): Promise<void> {
     this.closed = true;
-    const outcomes = await Promise.allSettled(
-      [...this.leases.values()].map((lease) => this.release(lease)),
-    );
+    const outcomes = await Promise.allSettled([
+      ...this.controls,
+      ...[...this.leases.values()].map((lease) => this.release(lease)),
+    ]);
     const failures = outcomes.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
@@ -298,10 +300,29 @@ export class NodeWorkerWorkspaceQuiescence {
     const runId = randomUUID();
     const scopeKey = "workspace-quiescence-control:" + runId;
     const cleanup = this.supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
+    const completed = createDeferredCore();
+    this.controls.add(completed.promise);
+    // A failed cleanup remains owned, even after its caller observes the error.
+    void completed.promise.catch(() => undefined);
+    let releaseWorkspace: (() => void) | undefined;
+    const finishControl = async () => {
+      try {
+        await cleanup();
+        releaseWorkspace?.();
+        this.controls.delete(completed.promise);
+        completed.resolve();
+      } catch (error) {
+        // The scope owner caches uncertain extinction; close must not turn it
+        // into success or release workspace custody on a later attempt.
+        completed.reject(error);
+        throw error;
+      }
+    };
     const abort = () => this.supervisor.cancel(runId);
     signal?.addEventListener("abort", abort, { once: true });
     try {
       signal?.throwIfAborted();
+      releaseWorkspace = context.retainWorkspace();
       const run = await this.supervisor.spawn({
         mode: "child",
         runId,
@@ -325,7 +346,7 @@ export class NodeWorkerWorkspaceQuiescence {
       return result.stdout;
     } finally {
       signal?.removeEventListener("abort", abort);
-      await cleanup();
+      await finishControl();
     }
   }
 }

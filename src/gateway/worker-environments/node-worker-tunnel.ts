@@ -9,6 +9,7 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
 } from "../../infra/node-runner-inventory.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -238,10 +239,28 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       try {
         const { node, transport } = await findNode(entry, signal);
         assertCurrent();
+        const nativeOwnership =
+          node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
+        if (input.quiescence && !nativeOwnership) {
+          throw new Error(
+            "node workspace quiescence support changed; reconnect a compatible node host",
+          );
+        }
+        const params: NodeWorkerWorkspaceExecInput = {
+          ...input,
+          ...(nativeOwnership &&
+          !command.legacyQuiescence &&
+          !input.quiescence &&
+          !input.process &&
+          !input.transfer &&
+          !input.seed
+            ? { nativeProcessOwner: true }
+            : {}),
+        };
         result = await transport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-          params: input,
+          params,
           timeoutMs: remainingMs,
           signal,
           onDispatchReady,
@@ -343,6 +362,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         ownerSignal: entry.abortController.signal,
         isOwnerCurrent: () => isLiveEntry(entry),
         restoredWorkspace,
+        supportsNativeQuiescence: async () => {
+          const { node } = await findNode(entry, entry.abortController.signal);
+          if (!isLiveEntry(entry)) {
+            throw new Error("node worker workspace authority closed");
+          }
+          return node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
+        },
         workspaceTransfer: options.workspaceTransfer,
         runWorkspaceCommand: (command) => runWorkspaceCommand(entry, command),
       });

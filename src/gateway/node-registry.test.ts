@@ -4048,3 +4048,49 @@ describe("gateway/node-registry", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("revokes native workspace dispatch when the same connection withdraws ownership support", async () => {
+  const frames: string[] = [];
+  const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+  registerNodeSession(
+    nodeRegistry,
+    makeClient("conn-1", "node-1", frames, {
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      commands: ["system.run"],
+    }),
+    { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+  );
+  const declare = (supported: boolean) =>
+    updateNodeRunnerInventory({
+      registry: nodeRegistry,
+      nodeId: "node-1",
+      connId: "conn-1",
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          ...(supported ? { workspaceQuiescence: 1 } : {}),
+        },
+      },
+    });
+  declare(true);
+  const [candidate] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+  const proof = expectDefined(candidate, "native workspace proof");
+  expect(proof.workerHost.workspaceQuiescence).toBe(1);
+  expect(declare(false)).toEqual({ changed: true });
+  for (const params of [
+    { nativeProcessOwner: true },
+    { quiescence: { action: "release", nonce: "a".repeat(32) } },
+  ]) {
+    await expect(
+      nodeWorkerSupervisorTransport.invoke({
+        node: proof,
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        params,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "PRIVATE_DIALECT_UNAVAILABLE" } });
+  }
+  expect(frames).toEqual([]);
+});

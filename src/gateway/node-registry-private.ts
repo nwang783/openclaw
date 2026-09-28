@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isPrivateNodeInvokeCommand,
@@ -7,6 +8,7 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
@@ -525,6 +527,11 @@ export function registerNodeRegistryPrivateRuntime(
                 params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
               preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
               capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+              workspaceQuiescence:
+                params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+                isRecord(params.params) &&
+                (params.params.quiescence !== undefined ||
+                  params.params.nativeProcessOwner === true),
             },
           );
         if (!isProofCurrent()) {

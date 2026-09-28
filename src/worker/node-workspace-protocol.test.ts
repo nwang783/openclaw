@@ -264,3 +264,26 @@ it("admits bounded quiescence lifecycle operations without an arbitrary command"
     ),
   ).toThrow("quiescence owns its operation");
 });
+
+it("keeps foreground ownership opt-in and rejects combining operation owners", () => {
+  const foreground = { ...request, argv: ["node", "-e", "0"] };
+  expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify(foreground))).toEqual(foreground);
+  expect(
+    parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...foreground, nativeProcessOwner: true }))
+      .nativeProcessOwner,
+  ).toBe(true);
+  for (const conflicting of [
+    { nativeProcessOwner: false },
+    { nativeProcessOwner: true, process: { action: "start", processId: "app" } },
+    { nativeProcessOwner: true, seed: { action: "apply", key } },
+    {
+      nativeProcessOwner: true,
+      argv: [NODE_WORKSPACE_QUIESCENCE_COMMAND, "/workspace"],
+      quiescence: { action: "release", nonce: "a".repeat(32) },
+    },
+  ]) {
+    expect(() =>
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...foreground, ...conflicting })),
+    ).toThrow();
+  }
+});

@@ -18,6 +18,8 @@ export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
+// Couples the lease owner with foreground tree ownership; neither rolls out alone.
+export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -44,6 +46,7 @@ export type NodeWorkerHostDeclaration =
       environmentSession?: typeof NODE_WORKER_ENVIRONMENT_SESSION_VERSION;
       preparedWorkspace?: typeof NODE_WORKER_PREPARED_WORKSPACE_VERSION;
       capturedExecPolicy?: true;
+      workspaceQuiescence?: typeof NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
     };
 
 export type NodeRunnerInventoryDeclaration =
@@ -70,7 +73,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (
     !capacity ||
     keys.length < 2 ||
-    keys.length > 9 ||
+    keys.length > 10 ||
     !keys.includes("enabled") ||
     !keys.includes("capacity") ||
     keys.some(
@@ -83,7 +86,8 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "portalStream" &&
         key !== "environmentSession" &&
         key !== "preparedWorkspace" &&
-        key !== "capturedExecPolicy",
+        key !== "capturedExecPolicy" &&
+        key !== "workspaceQuiescence",
     ) ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
@@ -97,6 +101,8 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
     (value.preparedWorkspace !== undefined &&
       value.preparedWorkspace !== NODE_WORKER_PREPARED_WORKSPACE_VERSION) ||
     (value.capturedExecPolicy !== undefined && value.capturedExecPolicy !== true) ||
+    (value.workspaceQuiescence !== undefined &&
+      value.workspaceQuiescence !== NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION) ||
     (value.bundleStatus !== undefined && value.bundleRetention === undefined)
   ) {
     return null;
@@ -123,6 +129,9 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
       : {}),
     ...(value.capturedExecPolicy === true ? { capturedExecPolicy: true } : {}),
+    ...(value.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION
+      ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
+      : {}),
   };
 }
 

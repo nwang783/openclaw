@@ -84,6 +84,8 @@ export type WorkerWorkspaceCommand = {
   seed?: NodeWorkerWorkspaceSeedInput;
   process?: NodeWorkerWorkspaceProcessInput;
   quiescence?: NodeWorkerWorkspaceQuiescenceInput;
+  /** Legacy scripts own their detached lease helper, not the foreground command scope. */
+  legacyQuiescence?: true;
 };
 
 export type WorkerLocalWorkspaceSyncRequest = {

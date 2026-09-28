@@ -5,6 +5,7 @@ import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
@@ -232,7 +233,8 @@ export function sameNodeWorkerHostDeclaration(
         left.portalStream === right.portalStream &&
         left.environmentSession === right.environmentSession &&
         left.preparedWorkspace === right.preparedWorkspace &&
-        left.capturedExecPolicy === right.capturedExecPolicy))
+        left.capturedExecPolicy === right.capturedExecPolicy &&
+        left.workspaceQuiescence === right.workspaceQuiescence))
   );
 }
 
@@ -304,6 +306,7 @@ export function isNodeWorkerSupervisorProofCurrent(
     environmentSession?: boolean;
     preparedWorkspace?: boolean;
     capturedExecPolicy?: boolean;
+    workspaceQuiescence?: boolean;
   } = {},
 ): boolean {
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -322,6 +325,8 @@ export function isNodeWorkerSupervisorProofCurrent(
     (!requirements.preparedWorkspace ||
       current.workerHost.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION) &&
     (!requirements.capturedExecPolicy || !resolveNodeWorkerExecutionIssue(current.workerHost)) &&
+    (!requirements.workspaceQuiescence ||
+      current.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION) &&
     (requirements.commands ?? []).every((command) => current.commands.includes(command))
   );
 }

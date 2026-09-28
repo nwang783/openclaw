@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWorkerWorkspaceQuiescence } from "../gateway/worker-environments/workspace-quiescence.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   NODE_WORKSPACE_QUIESCENCE_COMMAND,
@@ -113,6 +114,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await f.runtime.exec({
       ...identity,
       argv: [path.basename(process.execPath), "-e", "process.stdout.write('command-cleanup')"],
+      nativeProcessOwner: true,
     });
     expect(processIdentity.requireNodeWorkerProcessIdentity(lease.watchdog.pid)).toEqual(exact);
     await f.runtime.exec({
@@ -315,3 +317,36 @@ process.on("message", (message) => {
     },
   );
 });
+
+it.runIf(process.platform === "linux")(
+  "preserves an older Gateway's detached lease on the new node-host command route",
+  async () => {
+    const f = fixture();
+    const nativeForeground = vi.spyOn(f.runtime.processes, "executeForeground");
+    const quiesce = createWorkerWorkspaceQuiescence({
+      ownerSignal: new AbortController().signal,
+      sharedHost: true,
+      runWorkspaceCommand: (command) =>
+        f.runtime.exec(
+          parseNodeWorkerWorkspaceExecInput(
+            JSON.stringify({
+              ...identity,
+              argv: command.argv,
+            }),
+          ),
+        ),
+    });
+    const lease = await quiesce(f.workspaceDir);
+    try {
+      await f.runtime.exec({
+        ...identity,
+        argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
+      });
+      await lease.assertActive();
+      expect(nativeForeground).not.toHaveBeenCalled();
+      expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
+    } finally {
+      await lease.resume();
+    }
+  },
+);

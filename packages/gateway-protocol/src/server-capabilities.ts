@@ -8,6 +8,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
   NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",
+  NODE_WORKER_WORKSPACE_QUIESCENCE: "node-worker-workspace-quiescence-v1",
   NODE_WORKER_ENVIRONMENT_SESSION: "node-worker-environment-session-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",

@@ -117,6 +117,7 @@ const WorkspaceInput = workerProtocolObject({
   seed: SeedInput.optional(),
   process: WorkspaceProcess.optional(),
   quiescence: WorkspaceQuiescence.optional(),
+  nativeProcessOwner: z.literal(true).optional(),
 });
 export type NodeWorkerWorkspaceSeedInput = z.infer<typeof SeedInput>;
 export type NodeWorkerWorkspaceExecInput = z.infer<typeof WorkspaceInput>;
@@ -173,10 +174,14 @@ export function parseNodeWorkerWorkspaceExecInput(
       input.transfer ||
       input.seed ||
       input.process ||
-      input.resetWorkspace !== undefined
+      input.resetWorkspace !== undefined ||
+      input.nativeProcessOwner
     ) {
       throw new Error("INVALID_REQUEST: workspace quiescence owns its operation");
     }
+  }
+  if (input.nativeProcessOwner && (input.process || input.seed || input.transfer)) {
+    throw new Error("INVALID_REQUEST: native process ownership requires a foreground command");
   }
   if (input.process && (input.seed || input.transfer || input.resetWorkspace !== undefined)) {
     throw new Error("INVALID_REQUEST: workspace process owns its operation");

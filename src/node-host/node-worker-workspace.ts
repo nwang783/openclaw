@@ -6,6 +6,7 @@ import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-
 import { isPathInside } from "../infra/path-guards.js";
 import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type {
   NodeWorkerPreparedWorkspaceInput,
   NodeWorkerPreparedWorkspaceResult,
@@ -683,6 +684,25 @@ export class NodeWorkerWorkspaceRuntime {
             retainWorkspace: () =>
               this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
           });
+        }
+        // Older Gateways and unqualified platforms retain the shipped command contract.
+        // In particular, legacy quiescence scripts must keep their detached lease helper.
+        if (!input.nativeProcessOwner) {
+          const result = await runCommandWithTimeout(input.argv, {
+            cwd: workspaceDir,
+            baseEnv: commandEnv,
+            ...(input.input === undefined ? {} : { input: input.input }),
+            timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            ...(signal ? { signal } : {}),
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+            maxOutputBytes: {
+              stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+              stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
+            },
+            terminateOnOutputLimit: true,
+          });
+          return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
         }
         const result = await this.processes.executeForeground({
           input,

@@ -147,7 +147,7 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-Managed exec and worker workspace commands on Linux with Node use a dedicated
+Managed exec and negotiated worker workspace commands on Linux with Node use a dedicated
 child subreaper. It acquires kernel child ownership before launch, adopts orphaned
 descendants, and stops and reaps them even if they create another process group
 or session. Completion requires the kernel to report no remaining children, the
