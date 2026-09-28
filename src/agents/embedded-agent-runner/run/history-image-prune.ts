@@ -16,12 +16,12 @@ import {
  * Prunes already-processed image payloads from replayed prompt history.
  */
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
 import { getTranscriptPromptText } from "../tool-result-context-guard.js";
 import {
   hasNonBlankUserText,
-  readFirstUserText,
   resolveUserTranscriptMessages,
   type UserTranscriptContext,
 } from "./attempt-history.js";
@@ -308,6 +308,10 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+function readReplayText(content: unknown): string | undefined {
+  return typeof content === "string" ? content : collectTextContentBlocks(content)[0];
+}
+
 /** Installs an agent context transform that prunes old image/media history before model input. */
 export function installHistoryImagePruneContextTransform(
   agent: PrunableContextAgent,
@@ -352,7 +356,7 @@ export function installHistoryImagePruneContextTransform(
           message.role !== "user" ||
           getTranscriptPromptText(message) !== undefined ||
           (liveTranscript?.role === "user" &&
-            readFirstUserText(message.content) !== readFirstUserText(liveTranscript.content))
+            readReplayText(message.content) !== readReplayText(liveTranscript.content))
         ) {
           continue;
         }
