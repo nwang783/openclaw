@@ -4,7 +4,7 @@ proof_root=/tmp/oc-bump-0212-native-hook-ab-evidence
 mkdir -p "$proof_root"
 git diff --quiet
 git diff --cached --quiet
-expected_head=bdf943d544a28efd560c5939548f5e075f65be7b
+expected_head=5b61e7211e58f0419e0a7b8e663b19fb7e796477
 test_file=extensions/qa-lab/src/codex-native-hook-pressure.e2e.test.ts
 export OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_CI_TEST_RUNTIME_POLICY=bun-compatible OPENCLAW_VITEST_MAX_WORKERS=3 NODE_OPTIONS=--max-old-space-size=8192
 snapshot() {
@@ -27,7 +27,7 @@ const manifest=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')
 assert.equal(manifest.version,expected);
 const read=(file)=>{try{return fs.readFileSync(file,'utf8').trim()}catch{return null}};
 const head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-assert.equal(head,'bdf943d544a28efd560c5939548f5e075f65be7b');
+assert.equal(head,'5b61e7211e58f0419e0a7b8e663b19fb7e796477');
 const testFile='extensions/qa-lab/src/codex-native-hook-pressure.e2e.test.ts';
 const record={variant,sourceHead:head,fsSafe:manifest.version,fsSafePath:root,native:getFsSafeNativeConfig(),node:process.version,kernel:os.release(),platform:os.platform(),architecture:os.arch(),osRelease:read('/etc/os-release'),hostPolicy:Object.fromEntries(['/proc/sys/kernel/unprivileged_userns_clone','/proc/sys/kernel/apparmor_restrict_unprivileged_userns','/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined','/proc/sys/user/max_user_namespaces'].map(p=>[p,read(p)])),processPolicy:read('/proc/self/status')?.split('\n').filter(x=>/^(Seccomp|NoNewPrivs):/.test(x)),env:Object.fromEntries(['FS_SAFE_NATIVE_MODE','OPENCLAW_FS_SAFE_NATIVE_MODE','OPENCLAW_E2E_USE_PREBUILT_DIST','OPENCLAW_CI_TEST_RUNTIME_POLICY','OPENCLAW_VITEST_MAX_WORKERS','NODE_OPTIONS'].map(k=>[k,process.env[k]??null])),sandbox:'workspace-write',testSha256:createHash('sha256').update(fs.readFileSync(testFile)).digest('hex'),command:['node','scripts/run-vitest.mjs','run','--config','test/vitest/vitest.e2e.config.ts',testFile]};
 fs.writeFileSync(path.join(dir,variant+'-environment.json'),JSON.stringify(record,null,2)+'\n');
@@ -88,7 +88,7 @@ for(const file of JSON.parse(fs.readFileSync(path.join(dir,'dependency-files.jso
  assert.deepEqual(clean(parse(fs.readFileSync(path.join(dir,'A-dependencies',file),'utf8'))),clean(parse(fs.readFileSync(file,'utf8'))),`pnpm changed unrelated dependencies in ${file}`);
 }
 assert.equal(JSON.parse(fs.readFileSync('package.json','utf8')).dependencies['@openclaw/fs-safe'],'0.21.1');
-fs.writeFileSync(path.join(dir,'B-dependency-verification.json'),JSON.stringify({sourceHead:'bdf943d544a28efd560c5939548f5e075f65be7b',unrelatedDependenciesUnchanged:true,fsSafe:'0.21.1'},null,2)+'\n');
+fs.writeFileSync(path.join(dir,'B-dependency-verification.json'),JSON.stringify({sourceHead:'5b61e7211e58f0419e0a7b8e663b19fb7e796477',unrelatedDependenciesUnchanged:true,fsSafe:'0.21.1'},null,2)+'\n');
 VERIFY
 git diff --stat > "$proof_root/B-working-diff.txt"
 run_variant B 0.21.1

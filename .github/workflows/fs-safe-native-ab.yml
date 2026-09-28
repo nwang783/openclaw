@@ -22,7 +22,7 @@ jobs:
       - name: Checkout exact PR candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: bdf943d544a28efd560c5939548f5e075f65be7b
+          ref: 5b61e7211e58f0419e0a7b8e663b19fb7e796477
           fetch-depth: 2
           persist-credentials: false
       - name: Prepare matching Node environment
