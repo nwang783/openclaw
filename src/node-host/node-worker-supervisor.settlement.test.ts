@@ -19,6 +19,7 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import type { NodeWorkerTurnReceipt, NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import type { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
 
 const mocks = vi.hoisted(() => ({
   launchClaim: vi.fn<NodeWorkerLaunchStore["claim"]>(),
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   turnMatching: vi.fn<NodeWorkerTurnStore["getMatching"]>(),
   turnFinish: vi.fn<NodeWorkerTurnStore["finish"]>(),
   drain: vi.fn<NodeWorkerJournalWorker["drain"]>(async () => {}),
+  quiescenceClose: vi.fn<NodeWorkerWorkspaceQuiescence["close"]>(async () => {}),
   retain:
     vi.fn<
       typeof import("./node-worker-workspace.js").NodeWorkerWorkspaceRuntime.prototype.applyRetainSnapshot
@@ -90,6 +92,10 @@ vi.mock("./node-worker-workspace.js", () => ({
   NodeWorkerWorkspaceRuntime: class {
     acquirePreparedWorkspace = () => undefined;
     applyRetainSnapshot = mocks.retain;
+    quiescence = {
+      hasActiveWork: () => false,
+      close: mocks.quiescenceClose,
+    } satisfies Pick<NodeWorkerWorkspaceQuiescence, "hasActiveWork" | "close">;
     processes = {
       hasActiveWork: () => false,
       stopEnvironment: async () => {},
@@ -154,6 +160,7 @@ it("joins accepted workspace retention before sealing journals on close", async 
   try {
     await nextTurn();
     expect(closed).toBe(false);
+    expect(mocks.quiescenceClose).toHaveBeenCalledOnce();
     expect(mocks.drain).not.toHaveBeenCalled();
     expect(await supervisor.hasActiveWork()).toBe(true);
     await expect(supervisor.retainWorkspaces(input)).rejects.toThrow("supervisor is closed");
