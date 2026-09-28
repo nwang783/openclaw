@@ -240,7 +240,7 @@ describe("cron tool", () => {
   }
 
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({ ok: true });
     extractDeliveryInfoMock.mockReset();
     extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
@@ -1330,26 +1330,26 @@ describe("cron tool", () => {
     expect(params).toHaveProperty("failureAlert", { after: 3, cooldownMs: 60_000 });
   });
 
-  it("caps agentTurn add toolsAllow to the creator tool surface", async () => {
+  it("rejects unavailable finite add tools instead of silently dropping them", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:telegram:group:restricted-room",
       creatorToolAllowlist: ["read", "cron"],
     });
 
-    await tool.execute("call-capped-add-tools", {
-      action: "add",
-      job: {
-        ...buildReminderAgentTurnJob(),
-        payload: {
-          kind: "agentTurn",
-          message: "hello",
-          toolsAllow: ["exec", "read"],
+    await expect(
+      tool.execute("call-capped-add-tools", {
+        action: "add",
+        job: {
+          ...buildReminderAgentTurnJob(),
+          payload: {
+            kind: "agentTurn",
+            message: "hello",
+            toolsAllow: ["exec", "read"],
+          },
         },
-      },
-    });
-
-    const params = expectSingleGatewayCallMethod("cron.add");
-    expect(params).toHaveProperty("payload.toolsAllow", ["read"]);
+      }),
+    ).rejects.toThrow("Requested automation tools are not currently executable: exec");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("stores the creator tool surface on agentTurn adds without explicit toolsAllow", async () => {
@@ -1614,16 +1614,18 @@ describe("cron tool", () => {
       resolveCreatorToolAuthority,
     });
 
-    await tool.execute("call-future-configured-mcp", {
-      action: "add",
-      job: {
-        ...buildReminderAgentTurnJob(),
-        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
-      },
-    });
+    await expect(
+      tool.execute("call-future-configured-mcp", {
+        action: "add",
+        job: {
+          ...buildReminderAgentTurnJob(),
+          payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+        },
+      }),
+    ).rejects.toThrow("Requested automation tools are not currently executable: future__tool");
 
     expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
-    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("keeps future-tool prevention for complete runtimes without a capture marker", async () => {
@@ -1632,15 +1634,17 @@ describe("cron tool", () => {
       creatorToolAllowlist: ["read"],
     });
 
-    await tool.execute("call-future-no-capture-marker", {
-      action: "add",
-      job: {
-        ...buildReminderAgentTurnJob(),
-        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
-      },
-    });
+    await expect(
+      tool.execute("call-future-no-capture-marker", {
+        action: "add",
+        job: {
+          ...buildReminderAgentTurnJob(),
+          payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+        },
+      }),
+    ).rejects.toThrow("Requested automation tools are not currently executable: future__tool");
 
-    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("resolves symbolic groups before persisting an add cap", async () => {
@@ -1666,7 +1670,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("does not write a default add when configured MCP authentication fails", async () => {
+  it("does not write a default add when authority discovery fails", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:main",
       resolveCreatorToolAuthority: async () => {
@@ -1812,21 +1816,16 @@ describe("cron tool", () => {
       creatorToolAllowlist: ["read", "cron"],
     });
 
-    await tool.execute("call-capped-dormant-system-event-update", {
-      action: "update",
-      id: "job-dormant",
-      job: {
-        payload: { kind: "systemEvent", toolsAllow: ["read", "exec"] },
-      },
-    });
-
-    expect(readGatewayCall()).toEqual({
-      method: "cron.update",
-      params: {
+    await expect(
+      tool.execute("call-capped-dormant-system-event-update", {
+        action: "update",
         id: "job-dormant",
-        patch: { payload: { kind: "systemEvent", toolsAllow: ["read"] } },
-      },
-    });
+        job: {
+          payload: { kind: "systemEvent", toolsAllow: ["read", "exec"] },
+        },
+      }),
+    ).rejects.toThrow("Requested automation tools are not currently executable: exec");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("expands plugin selectors against the creator tool surface on agentTurn adds", async () => {
@@ -1846,7 +1845,7 @@ describe("cron tool", () => {
         payload: {
           kind: "agentTurn",
           message: "hello",
-          toolsAllow: ["active-memory", "cron", "exec"],
+          toolsAllow: ["active-memory", "cron"],
         },
       },
     });
@@ -2948,7 +2947,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("caps agentTurn update toolsAllow to the creator tool surface", async () => {
+  it("rejects unavailable finite update tools before writing", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
         id: "job-7",
@@ -2960,21 +2959,19 @@ describe("cron tool", () => {
       agentSessionKey: "agent:main:telegram:group:restricted-room",
       creatorToolAllowlist: ["read", "cron"],
     });
-    await tool.execute("call-update-capped-tools", {
-      action: "update",
-      id: "job-7",
-      job: {
-        payload: {
-          toolsAllow: [" exec ", " read "],
+    await expect(
+      tool.execute("call-update-capped-tools", {
+        action: "update",
+        id: "job-7",
+        job: {
+          payload: {
+            toolsAllow: [" exec ", " read "],
+          },
         },
-      },
-    });
-
-    const params = readGatewayCall(1).params;
-    expect(params).toHaveProperty("patch.payload", {
-      kind: "agentTurn",
-      toolsAllow: ["read"],
-    });
+      }),
+    ).rejects.toThrow("Requested automation tools are not currently executable: exec");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall().method).toBe("cron.get");
   });
 
   it("keeps the creator tool surface when an agentTurn update clears toolsAllow", async () => {

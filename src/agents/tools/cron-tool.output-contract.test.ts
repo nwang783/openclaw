@@ -127,6 +127,16 @@ describe("automations output contract", () => {
       reply: { ...job, deliveryPreview },
     },
     {
+      name: "creation with excluded integrations",
+      args: { action: "add", job: createJob },
+      reply: { ...job, warnings: ["unrelated: run openclaw mcp login unrelated"] },
+    },
+    {
+      name: "declarative convergence with exclusions",
+      args: { action: "add", job: { ...createJob, declarationKey: "invoices" } },
+      reply: { created: true, job, warnings: ["unrelated: requires OAuth"] },
+    },
+    {
       name: "declarative convergence",
       args: { action: "add", job: { ...createJob, declarationKey: "invoices" } },
       reply: { created: false, updated: true, job, deliveryPreview },
@@ -135,6 +145,11 @@ describe("automations output contract", () => {
       name: "update",
       args: { action: "update", jobId: job.id, job: { name: "Check invoices" } },
       reply: job,
+    },
+    {
+      name: "update with excluded integrations",
+      args: { action: "update", jobId: job.id, job: { name: "Check invoices" } },
+      reply: { ...job, warnings: ["unrelated: requires OAuth"] },
     },
     {
       name: "removal",
