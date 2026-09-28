@@ -31,6 +31,7 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
+import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   hasInProcessGatewayToolContext,
@@ -91,6 +92,12 @@ function withBoundedSessionsResolved(
 
 const SessionsToolSchema = Type.Object(
   {
+    user: Type.Optional(
+      Type.String({
+        description:
+          "The person's requester_profile.id, required when several people have steered this turn.",
+      }),
+    ),
     action: stringEnum(ACTIONS, { description: "Action" }),
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,
@@ -349,7 +356,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     description:
       "cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.",
     parameters: SessionsToolSchema,
-    execute: async (_toolCallId, rawArgs) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       if (
@@ -712,6 +719,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           includeResolved ? result.resolved : undefined,
         ),
       );
-    },
+    }),
   };
 }

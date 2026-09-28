@@ -58,6 +58,8 @@ export type DispatchGatewayMethodInProcessOptions = {
 };
 
 export type ResolvedInProcessGatewayDispatch = {
+  /** Source custody after an accepted transfer, independent of its authorizing invocation. */
+  assertSourceCurrent: () => void;
   assertContextCurrent: () => void;
   assertCreatedInputSourceCurrent?: () => void;
   assertInvocationCurrent: () => void;
