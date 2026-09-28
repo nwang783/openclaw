@@ -88,6 +88,7 @@ import {
   createReplyOperation,
   type ReplyOperation,
   replyRunRegistry,
+  waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
@@ -143,7 +144,13 @@ const parkedSteer = vi.hoisted(() => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Reply completion can leave recovery-owner writes behind its successor barrier.
+    await waitForReplyRunSuccessorAdmission("main", null);
+    cleanup();
+  }),
+);
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
