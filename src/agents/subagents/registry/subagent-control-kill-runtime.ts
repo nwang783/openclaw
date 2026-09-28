@@ -199,6 +199,20 @@ export async function killSubagentRun(params: {
   let killClaim: ReturnType<typeof claimSubagentRunKill>;
   let stopAccepted = false;
   let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
+  const releaseKillClaim = (claim: NonNullable<typeof killClaim>) =>
+    releaseSubagentRunKillClaim({
+      runId: params.entry.runId,
+      expected: params.entry,
+      claim,
+    });
+  const claimKill = () =>
+    claimSubagentRunKill({
+      runId: params.entry.runId,
+      expected: params.entry,
+      sessionId,
+      sessionLifecycleRevision,
+      suppressTaskDelivery: params.suppressTaskDelivery,
+    });
   const cancellationFailure = (
     error: unknown,
     declined?: true,
@@ -206,11 +220,7 @@ export async function killSubagentRun(params: {
     let reason = formatErrorMessage(error);
     if (killClaim && !stopAccepted) {
       try {
-        releaseSubagentRunKillClaim({
-          runId: params.entry.runId,
-          expected: params.entry,
-          claim: killClaim,
-        });
+        releaseKillClaim(killClaim);
       } catch (releaseError) {
         reason += ` Kill intent could not be released: ${formatErrorMessage(releaseError)}`;
       }
@@ -248,11 +258,7 @@ export async function killSubagentRun(params: {
   };
   const releaseChangedSessionKill = (claim: NonNullable<typeof killClaim>) => {
     try {
-      releaseSubagentRunKillClaim({
-        runId: params.entry.runId,
-        expected: params.entry,
-        claim,
-      });
+      releaseKillClaim(claim);
     } catch (error) {
       return {
         killed: false,
@@ -264,6 +270,26 @@ export async function killSubagentRun(params: {
       killed: false,
       sessionId,
       error: "Subagent session changed while the kill was pending; retry.",
+    };
+  };
+  const reportStillActive = () => {
+    try {
+      if (killClaim && !stopAccepted) {
+        releaseKillClaim(killClaim);
+      }
+    } catch (error) {
+      return {
+        killed: false,
+        sessionId,
+        error: `Subagent remained active and its kill intent could not be released: ${formatErrorMessage(error)}`,
+      };
+    }
+    return {
+      killed: false,
+      sessionId,
+      error: stopAccepted
+        ? "Subagent accepted cancellation but is still active; cleanup is pending."
+        : "Subagent is still active; try the kill again in a moment.",
     };
   };
   return await runExclusiveSessionLifecycleMutation({
@@ -307,13 +333,7 @@ export async function killSubagentRun(params: {
         try {
           // Active completion must see cancellation before admission interruption.
           // Pending launch/recovery owners first need the drain to commit their identity.
-          killClaim = claimSubagentRunKill({
-            runId: params.entry.runId,
-            expected: params.entry,
-            sessionId,
-            sessionLifecycleRevision,
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
+          killClaim = claimKill();
         } catch (error) {
           preparationResult = {
             killed: false,
@@ -357,28 +377,7 @@ export async function killSubagentRun(params: {
         return { killed: false, sessionId, declined: true as const };
       }
       if (admission === "busy") {
-        try {
-          if (killClaim && !stopAccepted) {
-            releaseSubagentRunKillClaim({
-              runId: params.entry.runId,
-              expected: params.entry,
-              claim: killClaim,
-            });
-          }
-        } catch (error) {
-          return {
-            killed: false,
-            sessionId,
-            error: `Subagent remained active and its kill intent could not be released: ${formatErrorMessage(error)}`,
-          };
-        }
-        return {
-          killed: false,
-          sessionId,
-          error: stopAccepted
-            ? "Subagent accepted cancellation but is still active; cleanup is pending."
-            : "Subagent is still active; try the kill again in a moment.",
-        };
+        return reportStillActive();
       }
       let readFailure: { error: unknown } | undefined;
       try {
@@ -444,13 +443,7 @@ export async function killSubagentRun(params: {
         });
       if (!killClaim) {
         try {
-          killClaim = claimSubagentRunKill({
-            runId: params.entry.runId,
-            expected: params.entry,
-            sessionId,
-            sessionLifecycleRevision,
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
+          killClaim = claimKill();
         } catch (error) {
           return {
             killed: false,
@@ -536,24 +529,7 @@ export async function killSubagentRun(params: {
           );
         }
         if (active && !stopAccepted) {
-          try {
-            releaseSubagentRunKillClaim({
-              runId: params.entry.runId,
-              expected: params.entry,
-              claim: killClaim,
-            });
-          } catch (error) {
-            return {
-              killed: false,
-              sessionId,
-              error: `Subagent remained active and its kill intent could not be released: ${formatErrorMessage(error)}`,
-            };
-          }
-          return {
-            killed: false,
-            sessionId,
-            error: "Subagent is still active; try the kill again in a moment.",
-          };
+          return reportStillActive();
         }
         const targetState = resolveSubagentKillTargetState(params.entry);
         if (targetState) {
@@ -565,11 +541,7 @@ export async function killSubagentRun(params: {
             markKilledBestEffort();
           } else {
             try {
-              releaseSubagentRunKillClaim({
-                runId: params.entry.runId,
-                expected: params.entry,
-                claim: killClaim,
-              });
+              releaseKillClaim(killClaim);
             } catch (error) {
               return {
                 killed: false,
