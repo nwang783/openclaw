@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { wake as wakeCronService } from "../cron/service/wake.js";
-import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
+import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
+import { setSessionEventWakesEnabled } from "./session-event-wake.js";
 
 describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
@@ -136,7 +137,7 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   }
 
   afterEach(() => {
-    setHeartbeatsEnabled(true);
+    setSessionEventWakesEnabled(true);
     resetConfigRuntimeState();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -258,7 +259,7 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
 
   it("keeps targeted cron wakes globally disabled", async () => {
     useFakeHeartbeatTime();
-    setHeartbeatsEnabled(false);
+    setSessionEventWakesEnabled(false);
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
       cfg: {

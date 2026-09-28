@@ -13,7 +13,8 @@ import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-ar
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
-import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.test-support.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -28,6 +29,7 @@ import {
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginRegistry } from "./prepared-model-runtime.plugin-lifetime.js";
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
+import { publishPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.test-support.js";
 import * as runtimePlugins from "./runtime-plugins.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-registry-borrow" });

@@ -29,8 +29,9 @@ import {
 import { typedCases } from "../test-utils/typed-cases.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { type HeartbeatDeps, runHeartbeatOnce } from "./heartbeat-runner.js";
+import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import {
+  type HeartbeatDeps,
   heartbeatTestConfig,
   readSessionStoreForTest,
   seedHeartbeatScratchForTest,

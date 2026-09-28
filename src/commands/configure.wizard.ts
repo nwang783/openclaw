@@ -64,7 +64,6 @@ import {
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
-import { setupSkills } from "./onboard-skills.js";
 import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
@@ -637,6 +636,7 @@ export async function runConfigureWizard(
         });
       },
       skills: async () => {
+        const { setupSkills } = await import("./onboard-skills.js");
         nextConfig = await setupSkills(
           nextConfig,
           (await resolveSetupTarget()).workspaceDir,

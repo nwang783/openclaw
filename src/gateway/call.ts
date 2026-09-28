@@ -96,11 +96,7 @@ import {
   isGatewayTransportError,
 } from "./transport-error.js";
 export type { GatewayConnectionDetails };
-export {
-  GatewayTransportError,
-  isGatewayTransportError,
-  type GatewayTransportErrorKind,
-} from "./transport-error.js";
+export { GatewayTransportError, isGatewayTransportError } from "./transport-error.js";
 
 export type GatewayRequestFunction = <T = Record<string, unknown>>(
   method: string,
@@ -458,8 +454,6 @@ async function ensureGatewayCallCanAuthenticate(params: {
   });
 }
 
-export type { ExplicitGatewayAuth } from "./credentials.js";
-
 export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
 
 type ResolvedGatewayCallContext = {
@@ -570,8 +564,6 @@ function ensureRemoteModeUrlConfigured(params: {
     ].join("\n"),
   );
 }
-
-export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
 /** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
 function createGatewayUnreachableTransportError(params: {

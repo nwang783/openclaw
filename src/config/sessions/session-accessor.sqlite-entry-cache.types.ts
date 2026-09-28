@@ -1,5 +1,18 @@
+import type { Selectable } from "kysely";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { SessionEntry } from "./types.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import type { SqliteSessionOwnerRow } from "./session-accessor.sqlite-owner-projection.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
+
+export type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]>;
+
+export type ResolvedSessionEntryRow = {
+  entry: InternalSessionEntry;
+  row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
+    SqliteSessionOwnerRow & { rowid?: string } & Partial<
+      Pick<SessionEntryRow, "legacy_acp_migration_json">
+    >;
+};
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
@@ -63,6 +76,15 @@ export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
+};
+
+export type SessionEntryReplacementPublication = {
+  kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
+  previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
+  current: Map<string, SessionSharingEntry>;
+  changedKeys: string[];
+  membershipInvalidatedKeys: string[];
 };
 
 const creationBrand = Symbol("sessionEntryCreation");

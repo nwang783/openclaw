@@ -68,6 +68,7 @@ import {
   MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
   type UserProfile,
   type UserProfileAvatarMime,
+  type UserProfileGitHubSyncInput,
 } from "./user-profiles.types.js";
 
 export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
@@ -79,10 +80,6 @@ export {
 export { listProfiles } from "./user-profile-reads.js";
 
 export { adoptTailscaleProfileAvatar } from "./user-profiles-avatar.js";
-
-type GitHubAuthenticationAlias =
-  | { kind: "email"; email: string }
-  | { kind: "github-login"; login: string };
 
 type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
@@ -565,7 +562,7 @@ export function setDisplayName(
 }
 
 function normalizeGitHubAuthenticationAlias(
-  alias: GitHubAuthenticationAlias,
+  alias: UserProfileGitHubSyncInput["authenticationAlias"],
 ): { kind: "email"; email: string } | { kind: "github-login"; subject: string } {
   return alias.kind === "email"
     ? { kind: "email", email: normalizeEmail(alias.email) }
@@ -573,13 +570,7 @@ function normalizeGitHubAuthenticationAlias(
 }
 
 export function syncGitHubIdentity(
-  params: {
-    identity: { accountId: number; login: string; name?: string };
-    authenticationAlias: GitHubAuthenticationAlias;
-    initialDisplayName?: string;
-    /** OIDC enrichment must retain the authenticated email profile and its credit preference. */
-    preserveEmailProfile?: boolean;
-  },
+  params: UserProfileGitHubSyncInput,
   options: UserProfileMutationOptions = {},
 ): UserProfileListItem {
   const alias = normalizeGitHubAuthenticationAlias(params.authenticationAlias);

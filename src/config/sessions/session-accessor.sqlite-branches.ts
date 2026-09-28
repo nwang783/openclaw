@@ -13,6 +13,10 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
+import type {
+  SessionBranchSummaryReadRequest,
+  SessionBranchSummaryReadResult,
+} from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   normalizeSqliteSessionKey,
@@ -33,6 +37,7 @@ import {
   assertSessionTranscriptHot,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
+import { runSessionBranchSummaryWorkerRequest } from "./session-transcript-read-worker-runtime.js";
 
 const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
@@ -41,17 +46,6 @@ type SessionBranchCacheEntry = SessionTranscriptWatermark & {
   appendSafe?: boolean;
   identity: OpenClawAgentDatabaseIdentity;
 };
-
-export type SessionBranchSummaryReadRequest = {
-  database: { agentId: string; path: string };
-  databaseIdentity: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-};
-export type SessionBranchSummaryReadResult =
-  | ({ status: "ok"; branches: SessionBranchSummary[] } & SessionTranscriptWatermark)
-  | { status: "missing-session" | "failed" };
 
 // Host and worker isolates share this policy, each retaining only their compact derived results.
 const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
@@ -241,8 +235,6 @@ export async function listSessionBranches(
         let pending = pendingBranchReads.get(key);
         if (!pending) {
           pending = (async () => {
-            const { runSessionBranchSummaryWorkerRequest } =
-              await import("./session-transcript-read-worker-runtime.js");
             const read = () => {
               assertCurrent();
               return runSessionBranchSummaryWorkerRequest(request, controller.signal);

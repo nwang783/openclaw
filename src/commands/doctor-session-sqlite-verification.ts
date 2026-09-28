@@ -3,8 +3,8 @@ import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import type { SessionStoreTarget } from "../config/sessions/session-store-target.types.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {

@@ -30,49 +30,7 @@ import {
   syncGitHubIdentity,
 } from "./user-profiles.js";
 import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
-
-export type UserProfileWriteResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; kind: "not-found"; profileId: string }
-  | { ok: false; kind: "merge"; message: string }
-  | { ok: false; kind: "owner"; code: UserProfileOwnerError["code"] };
-export type UserProfileWriteOperations = {
-  "userProfiles.setRole": {
-    input: { profileId: string; role: string | null };
-    output: UserProfileWriteResult<ReturnType<typeof setUserProfileRole>>;
-  };
-  "userProfiles.linkEmail": {
-    input: { email: string; targetProfileId: string };
-    output: UserProfileWriteResult<{
-      profile: ReturnType<typeof linkEmail>;
-      display: ReturnType<typeof projectUserProfileDisplay>;
-    }>;
-  };
-  "userProfiles.merge": {
-    input: { sourceProfileId: string; targetProfileId: string };
-    output: UserProfileWriteResult<
-      ReturnType<typeof mergeProfiles> & {
-        display: ReturnType<typeof projectUserProfileDisplay>;
-      }
-    >;
-  };
-  "userProfiles.ensureEmail": {
-    input: { email: string };
-    output: UserProfileWriteResult<ReturnType<typeof ensureProfileForEmail>>;
-  };
-  "userProfiles.ensureTailscale": {
-    input: Parameters<typeof ensureProfileForTailscaleIdentity>[0];
-    output: UserProfileWriteResult<ReturnType<typeof ensureProfileForTailscaleIdentity>>;
-  };
-  "userProfiles.syncGitHub": {
-    input: Parameters<typeof syncGitHubIdentity>[0];
-    output: UserProfileWriteResult<ReturnType<typeof syncGitHubIdentity>>;
-  };
-  "userProfiles.ensureOwner": {
-    input: { displayName: string | null };
-    output: UserProfileWriteResult<ReturnType<typeof ensureGatewayOwnerProfile>>;
-  };
-};
+import type { UserProfileWriteOperations } from "./user-profiles.worker-contract.js";
 export function isUserProfileWriteCommand(command: {
   type: string;
 }): command is SqliteWorkerCommand<UserProfileWriteOperations> {

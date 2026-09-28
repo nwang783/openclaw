@@ -39,6 +39,7 @@ type RegistryTestApi = {
   }): Promise<number>;
   releaseSubagentRun(runId: string): void;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
+  scheduleSubagentRegistrySweep(params?: { delayMs?: number }): void;
   testing: {
     failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
@@ -54,6 +55,10 @@ function getRegistryTestApi(): RegistryTestApi {
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   getRegistryTestApi().resetSubagentRegistryForTests(opts);
+}
+
+export function scheduleSubagentRegistrySweep(params?: { delayMs?: number }) {
+  getRegistryTestApi().scheduleSubagentRegistrySweep(params);
 }
 
 export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
