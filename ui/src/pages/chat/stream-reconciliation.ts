@@ -302,13 +302,12 @@ export function visibleAssistantStreamParts(
           ? segment.text.slice(0, segment.displayStartOffset)
           : null
         : previousVisibleText;
-    const visible = visibleAssistantStreamText(
+    const projectedText =
       usesAccumulatedText && (!resetsAccumulatedText || segmentPrefix)
         ? trimAccumulatedStreamPrefix(segment.text, segmentPrefix)
-        : segment.text,
-      opts.isHiddenStreamText,
-    );
-    if (visible && indexedToolRef) {
+        : segment.text;
+    const visible = visibleAssistantStreamText(projectedText, opts.isHiddenStreamText);
+    if (projectedText.trim() && indexedToolRef) {
       consumedPositionalToolIds.add(indexedToolRef.identity);
     }
     if (visible && segment.persisted !== true) {

@@ -409,6 +409,41 @@ describe("commentary paragraph boundary overlap", () => {
     expect(renderedTexts(host).filter((text) => text === "Same")).toHaveLength(2);
   });
 
+  it("settles identical pending receipts from one metadata-free cumulative frame", () => {
+    const host = makeChatHost({ chatRunId: "run-1", sessionKey: "main" });
+    for (const [messageId, itemId, messageSeq] of [
+      ["saved-a", "commentary-a", 1],
+      ["saved-b", "commentary-b", 2],
+    ] as const) {
+      applySessionMessagePayload(
+        host,
+        {
+          runId: "run-1",
+          messageId,
+          messageSeq,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Same" }],
+            __openclaw: { id: messageId, seq: messageSeq, runId: "run-1" },
+            openclawStreamFallback: { source: "segment", itemId },
+          },
+        },
+        true,
+        { kind: "live", activeRunId: "run-1" },
+      );
+    }
+
+    handleChatGatewayEvent(host, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 1,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "Same\n\nSame" }] },
+    });
+
+    expect(renderedTexts(host)).toEqual(["Same", "Same"]);
+  });
+
   it("persists the active reused-ID occurrence without hiding the earlier one", () => {
     const host = makeChatHost({ chatRunId: "run-1", sessionKey: "main" });
     const delta = (seq: number, text: string, itemStartOffset: number) =>

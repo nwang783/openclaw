@@ -96,6 +96,10 @@ export function createChatThreadToolPlacement(params: {
       if (emittedTools.has(tool.projection) || reserved?.has(tool.projection)) {
         continue;
       }
+      const predecessorKey = previousToolKeyByRun.get(tool.runId);
+      if (predecessorKey) {
+        tool.projection.predecessorKey = predecessorKey;
+      }
       tool.projection.bounds = params.resolveBounds(
         tool.runId,
         params.toolBeforeBoundaries.get(tool.runId, tool.callId),
@@ -103,6 +107,7 @@ export function createChatThreadToolPlacement(params: {
       );
       params.projections.push(tool.projection);
       emittedTools.add(tool.projection);
+      previousToolKeyByRun.set(tool.runId, tool.projection.item.key);
     }
   };
   return {

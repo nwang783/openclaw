@@ -151,7 +151,9 @@ export function applySessionMessagePayload(
     { scope, runActive },
   );
   if (incoming.role === "assistant" && projection.messages.includes(message)) {
-    prunePersistedAssistantStreamSegments(state, message);
+    prunePersistedAssistantStreamSegments(state, message, {
+      preserveReplayReceipt: source.kind === "live",
+    });
     if (assistantOwnerRunId && runActive === false) {
       state.chatStream = null;
       state.chatStreamItemId = undefined;

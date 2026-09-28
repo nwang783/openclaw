@@ -23,6 +23,7 @@ import {
 } from "./stream-reconciliation.ts";
 import {
   accumulatedRunText,
+  advanceReceipt,
   completePendingCommentary,
   discardStreamSegmentIndexes,
   findRetiredCommentarySegment,
@@ -44,7 +45,7 @@ export function reconcilePersistedAssistantStream(
   }
   const settledReplayPrefixes = new Map<string, string>();
   let settledReplay: { itemId: string; prefix: string } | undefined;
-  let settledIdFreeReplayText: string | undefined;
+  let settledIdFreeReplayPrefix: string | undefined;
   for (const segment of state.chatStreamSegments ?? []) {
     if (segment.runId !== runId || !segment.retiredItemId || !segment.pendingCommentary) {
       continue;
@@ -52,7 +53,7 @@ export function reconcilePersistedAssistantStream(
     if (segment.pendingCommentary.requiresReplayItemId && !replayedCommentaryItemId) {
       continue;
     }
-    if (!replayedCommentaryItemId && settledIdFreeReplayText === segment.pendingCommentary.text) {
+    if (!replayedCommentaryItemId && !advanceReceipt(state, segment, settledIdFreeReplayPrefix)) {
       continue;
     }
     if (
@@ -172,7 +173,7 @@ export function reconcilePersistedAssistantStream(
     const handoff = retireCommentaryStream(state, commentary);
     if (handoff) {
       if (!replayedCommentaryItemId) {
-        settledIdFreeReplayText = segment.pendingCommentary.text;
+        settledIdFreeReplayPrefix = handoff.prefix ?? state.chatStream ?? segment.text;
       }
       settledReplayPrefixes.set(
         segment.retiredItemId,
@@ -384,6 +385,7 @@ export function retireCommentaryStream(
 export function prunePersistedAssistantStreamSegments(
   state: ToolStreamReconciliationState,
   message: unknown,
+  opts?: { preserveReplayReceipt?: boolean },
 ): void {
   const identity = readAssistantStreamSegmentIdentity(message);
   if (!identity || !state.chatStreamSegments) {
@@ -678,6 +680,11 @@ export function prunePersistedAssistantStreamSegments(
     !currentItemSnapshot &&
     runId &&
     text &&
+    (opts?.preserveReplayReceipt === true ||
+      replacedIndexes.some((index) => {
+        const segment = initialSegments[index];
+        return segment ? streamSegmentUsesAccumulatedText(segment) : false;
+      })) &&
     !state.chatStreamSegments.some(
       (segment) => segment.runId === runId && segment.retiredItemId === identity.itemId,
     )

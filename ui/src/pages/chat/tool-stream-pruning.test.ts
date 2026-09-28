@@ -248,6 +248,32 @@ describe("persisted tool stream pruning", () => {
     );
   });
 
+  it("keeps positional tool ownership aligned after hidden stream text", () => {
+    const runId = "run-1";
+    const firstTool = buildToolStreamIdentity(runId, "call-1");
+    const secondTool = buildToolStreamIdentity(runId, "call-2");
+    const state = {
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "hidden", ts: 1, runId, cumulative: true as const },
+        { text: "hidden\n\nvisible", ts: 2, runId, cumulative: true as const },
+      ],
+      toolStreamOrder: [firstTool, secondTool],
+      toolStreamById: new Map([
+        [firstTool, { runId, toolCallId: "call-1" }],
+        [secondTool, { runId, toolCallId: "call-2" }],
+      ]),
+    };
+
+    expect(
+      visibleAssistantStreamParts(state, { isHiddenStreamText: (text) => text === "hidden" }).map(
+        (part) => part.toolCallId,
+      ),
+    ).toEqual(["call-2"]);
+  });
+
   it("resets a reused cumulative item after a keyed intervening owner", () => {
     const runId = "run-1";
     const state = {

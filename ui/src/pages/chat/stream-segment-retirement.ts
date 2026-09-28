@@ -77,6 +77,59 @@ export function findRetiredCommentarySegment(
   );
 }
 
+export function advanceReceipt(
+  state: ToolStreamReconciliationState,
+  segment: ChatStreamSegment,
+  settledPrefix?: string,
+): boolean {
+  const pending = segment.pendingCommentary;
+  if (!segment.retiredItemId || !segment.runId || !pending) {
+    return true;
+  }
+  const commentary = {
+    runId: segment.runId,
+    itemId: segment.retiredItemId,
+    text: pending.text,
+    ...(pending.sourceMessageId ? { sourceMessageId: pending.sourceMessageId } : {}),
+  };
+  const segments = state.chatStreamSegments ?? [];
+  const stream = state.chatStream ?? accumulatedRunText(segments, commentary.runId);
+  const receipt = findRetiredCommentarySegment(segments, commentary);
+  const receiptIndex = receipt ? segments.indexOf(receipt) : -1;
+  const precedingSettledPrefix = accumulatedRunText(
+    segments
+      .slice(0, Math.max(0, receiptIndex))
+      .filter((owner) => owner.retiredItemId && owner.pendingCommentary === undefined),
+    commentary.runId,
+  );
+  const consumedPrefix = settledPrefix ?? precedingSettledPrefix ?? undefined;
+  if (
+    !consumedPrefix ||
+    !stream?.startsWith(consumedPrefix) ||
+    stream.length <= consumedPrefix.length
+  ) {
+    return true;
+  }
+  const separator = /^(?:[ \t]*\r?\n){2}/u.exec(stream.slice(consumedPrefix.length))?.[0];
+  const consumedSeparator = /(?:[ \t]*\r?\n){2}$/u.test(consumedPrefix);
+  if (!separator && !consumedSeparator) {
+    return false;
+  }
+  const replayStart = consumedPrefix.length + (separator?.length ?? 0);
+  state.chatStreamSegments = state.chatStreamSegments?.map((owner) =>
+    owner === receipt && owner.pendingCommentary
+      ? {
+          ...owner,
+          pendingCommentary: {
+            ...owner.pendingCommentary,
+            prefixLength: Math.max(owner.pendingCommentary.prefixLength, replayStart),
+          },
+        }
+      : owner,
+  );
+  return true;
+}
+
 export function completePendingCommentary(
   state: ToolStreamReconciliationState,
   retired: ChatStreamSegment,
@@ -122,6 +175,14 @@ export function completePendingCommentary(
   }
   const originalSegments = state.chatStreamSegments ?? [];
   const retiredIndex = originalSegments.indexOf(retired);
+  const liveOwnerIndex = originalSegments.findIndex(
+    (segment, index) =>
+      index > retiredIndex &&
+      segment.runId === retired.runId &&
+      segment.persisted !== true &&
+      !streamSegmentUsesAccumulatedText(segment) &&
+      segment.itemId === retired.retiredItemId,
+  );
   const latePriorOwnerIndexes = new Set(
     originalSegments.flatMap((segment, index) =>
       index > retiredIndex &&
@@ -135,10 +196,12 @@ export function completePendingCommentary(
     ),
   );
   const settledSegments: ChatStreamSegment[] = [];
-  for (const segment of originalSegments) {
+  for (const [index, segment] of originalSegments.entries()) {
     let settled = segment;
     if (segment === retired) {
       settled = { ...segment, text: prefix, pendingCommentary };
+    } else if (index === liveOwnerIndex) {
+      settled = { ...segment, text };
     } else if (segment.pendingCommentaryPrefixFor === retired.retiredItemId) {
       const keyedOwner = state.chatStreamSegments?.some(
         (owner) =>

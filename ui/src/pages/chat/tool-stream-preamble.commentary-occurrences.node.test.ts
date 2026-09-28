@@ -814,6 +814,21 @@ describe("commentary occurrence ownership", () => {
     expect(renderedTexts(host)).toEqual(["First", "Second"]);
   });
 
+  it("advances past a persisted receipt whose trailing space consumes the separator", () => {
+    const host = makeChatHost({ chatRunId: "run-1", sessionKey: "main" });
+    persistCommentary(host, "First ", "commentary-a", "saved-first");
+    persistCommentary(host, "Second", "commentary-b", "saved-second");
+    handleChatGatewayEvent(host, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 1,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "First \n\nSecond" }] },
+    });
+
+    expect(renderedTexts(host)).toEqual(["First ", "Second"]);
+  });
+
   it("preserves keyed ownership through a metadata-free cumulative extension", () => {
     const host = makeChatHost({ chatRunId: "run-1", sessionKey: "main" });
     handleChatGatewayEvent(host, {
