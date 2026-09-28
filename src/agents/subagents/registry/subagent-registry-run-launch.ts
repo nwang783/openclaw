@@ -5,7 +5,6 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
@@ -30,8 +29,6 @@ import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
-
-const log = createSubsystemLogger("agents/subagent-registry");
 
 function resolveSwarmWaitOwnerSessionKeys(
   getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>,
@@ -314,27 +311,14 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     }
     entry.swarmLaunchPending = false;
     entry.queuedLaunch = undefined;
-    let persistedRunning = false;
     try {
       this.options.persistOrThrow(previousRunId, nextRunId);
       if (terminalBeforeAcceptance) {
         bindGatewayContextResolver(entry, gatewayContextResolver);
         return true;
       }
-      persistedRunning = true;
     } catch (error) {
       restoreQueuedRun();
-      if (persistedRunning) {
-        try {
-          this.options.persistOrThrow(previousRunId, nextRunId);
-        } catch (rollbackError) {
-          // The failure callback terminalizes this in-memory queued row next.
-          log.warn("failed to persist collector start rollback", {
-            runId: previousRunId,
-            error: rollbackError,
-          });
-        }
-      }
       throw error;
     }
     bindGatewayContextResolver(entry, gatewayContextResolver);
