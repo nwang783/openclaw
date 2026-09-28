@@ -312,12 +312,16 @@ export async function prepareFileContextFromMedia(params: {
   maxChars: number;
   assertCurrent: () => void;
 }) {
+  const context = { Provider: params.channelId, AccountId: params.accountId };
   return await renderInboundDocumentContext({
-    ctx: {
-      media: [...params.media],
-      Provider: params.channelId,
-      AccountId: params.accountId,
-    },
+    ctx: { ...context, media: [...params.media] },
+    // Recorded workspaces locate the original file; they cannot grant this
+    // attempt access after a fork or reassignment. Only current roots authorize reads.
+    localPathRoots: resolveMediaAttachmentLocalRoots({
+      cfg: params.config,
+      ctx: context,
+      workspaceDir: params.workspaceDir,
+    }),
     cfg: params.config,
     workspaceDir: params.workspaceDir,
     maxChars: params.maxChars,
@@ -332,6 +336,7 @@ export async function renderInboundDocumentContext(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   workspaceDir?: string;
+  localPathRoots?: readonly string[];
   maxChars?: number;
   assertCurrent?: () => void;
 }): Promise<InboundDocumentContext> {
@@ -340,11 +345,13 @@ export async function renderInboundDocumentContext(params: {
   const limits = resolveFileExtractionLimits(cfg);
   const attachments = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
-      workspaceDir: params.workspaceDir,
-    }),
+    localPathRoots:
+      params.localPathRoots ??
+      resolveMediaAttachmentLocalRoots({
+        cfg,
+        ctx,
+        workspaceDir: params.workspaceDir,
+      }),
     // The scoped root set is authoritative: merging sessionless defaults back in would restore
     // the shared workspace/sandbox parents for sandboxed sessions.
     includeDefaultLocalPathRoots: false,

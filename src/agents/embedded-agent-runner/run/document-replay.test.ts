@@ -10,8 +10,12 @@ import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildForkedChildTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-parent-fork.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import * as fsSafe from "../../../infra/fs-safe.js";
 import { prepareFileContextFromMedia } from "../../../media-understanding/file-context.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../../media/media-facts.js";
+import { saveMediaBuffer } from "../../../media/store.js";
+import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
+import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { Agent, type AgentMessage, type StreamFn } from "../../runtime/index.js";
 import {
   castAgentMessage,
@@ -102,21 +106,47 @@ function fixture(workspaceDir: string, config?: OpenClawConfig, assertCurrent?: 
 }
 
 describe("native document replay", () => {
-  it.each(["next turn", "fork"])(
-    "restores suppressed paste text at the %s provider boundary without rewriting history",
-    async (route) => {
+  it.each([
+    { route: "next turn", relocated: false, alias: false },
+    { route: "fork", relocated: false, alias: false },
+    { route: "next turn", relocated: true, alias: false },
+    { route: "fork", relocated: true, alias: false },
+    { route: "fork", relocated: true, alias: true },
+  ])(
+    "authorizes saved documents at the $route provider boundary (relocated=$relocated, alias=$alias)",
+    async ({ route, relocated, alias }) => {
       const workspaceDir = tempDirs.make("openclaw-document-replay-");
-      const file = path.join(workspaceDir, "brief.txt");
+      const sourceWorkspace = relocated
+        ? tempDirs.make("openclaw-former-workspace-")
+        : workspaceDir;
+      const file = path.join(sourceWorkspace, "brief.txt");
       await fs.writeFile(file, "Synthetic replay sentinel: remember the blue lighthouse.");
-      const original = user([
-        {
-          path: file,
-          contentType: "text/plain",
-          kind: "document",
-          origin: "paste",
-          hydrationSuppressed: true,
-        },
-      ]);
+      const recordedWorkspace = alias
+        ? path.join(tempDirs.make("openclaw-former-alias-"), "workspace")
+        : sourceWorkspace;
+      if (alias) {
+        await fs.symlink(
+          sourceWorkspace,
+          recordedWorkspace,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      const original = castAgentMessage(
+        buildPersistedUserTurnMessage({
+          text: "",
+          timestamp: 1,
+          media: [
+            {
+              path: "brief.txt",
+              workspaceDir: recordedWorkspace,
+              contentType: "text/plain",
+              kind: "document",
+              origin: "paste",
+              hydrationSuppressed: true,
+            },
+          ],
+        }),
+      );
       const assistant = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Noted." }],
         timestamp: 2,
@@ -149,21 +179,69 @@ describe("native document replay", () => {
             )
           : [original, assistant];
       const serialized = JSON.stringify(history);
+      const open = vi.spyOn(fsSafe, "openLocalFileSafely");
       const { agent, requests, cleanup } = fixture(workspaceDir);
       try {
         agent.state.messages = history.slice();
         await agent.prompt("What did the brief say?");
         const text = JSON.stringify(requests[0]?.messages[0]);
-        expect(text).toContain("remember the blue lighthouse");
-        expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-        expect(text.match(/remember the blue lighthouse/g)).toHaveLength(1);
+        const openedPaths = open.mock.calls.map(([input]) => input.filePath);
+        if (relocated) {
+          expect(openedPaths).not.toContain(path.join(recordedWorkspace, "brief.txt"));
+          expect(text).not.toContain("remember the blue lighthouse");
+          expect(text).toContain("could not be read");
+        } else {
+          expect(openedPaths).toContain(file);
+          expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+          expect(text.match(/remember the blue lighthouse/g)).toHaveLength(1);
+        }
         expect(JSON.stringify(history)).toBe(serialized);
         expect(JSON.stringify(agent.state.messages.slice(0, history.length))).toBe(serialized);
       } finally {
         cleanup();
+        open.mockRestore();
       }
     },
   );
+
+  it("keeps admitted managed uploads readable without restoring a former workspace grant", async () => {
+    const stateDir = tempDirs.make("openclaw-managed-document-");
+    const workspaceDir = path.join(stateDir, "sandboxes", "current");
+    const formerWorkspace = path.join(stateDir, "sandboxes", "former");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(formerWorkspace, { recursive: true });
+    const env = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const open = vi.spyOn(fsSafe, "openLocalFileSafely");
+    const { agent, requests, cleanup } = fixture(workspaceDir);
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const saved = await saveMediaBuffer(Buffer.from("admitted upload sentinel"), "text/plain");
+      const original = castAgentMessage(
+        buildPersistedUserTurnMessage({
+          text: "",
+          timestamp: 1,
+          media: [
+            {
+              url: `media://inbound/${saved.id}`,
+              workspaceDir: formerWorkspace,
+              contentType: "text/plain",
+              hydrationSuppressed: true,
+            },
+          ],
+        }),
+      );
+      const serialized = JSON.stringify(original);
+      agent.state.messages = [original, makeAgentAssistantMessage({ content: [] })];
+      await agent.prompt("Read the uploaded brief");
+      expect(JSON.stringify(requests[0]?.messages[0])).toContain("admitted upload sentinel");
+      expect(open.mock.calls.map(([input]) => input.filePath)).toContain(saved.path);
+      expect(JSON.stringify(original)).toBe(serialized);
+    } finally {
+      cleanup();
+      open.mockRestore();
+      env.restore();
+    }
+  });
 
   it.each([
     { pdfFirst: false, video: false, inline: false, photoSuppressed: false },
