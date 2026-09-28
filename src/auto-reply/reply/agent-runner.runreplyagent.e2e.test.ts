@@ -152,16 +152,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
@@ -5433,8 +5423,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
           expect(firstText).toBe("final");
           expect(secondText).toBe("final");
         }
-        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-        expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
         expect(sessionEntry.fallbackNotice).toBeUndefined();
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
       } finally {
@@ -5724,8 +5714,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(firstText).toContain("Model Fallback:");
       expect(secondText).toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }
