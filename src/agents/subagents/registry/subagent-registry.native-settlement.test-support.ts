@@ -31,7 +31,7 @@ export function registerRestoredRunDeadlineSettlementTests({
     | "callGateway"
     | "runSubagentAnnounceFlow"
   >;
-  hydrateAndActivateRegistry: () => void;
+  hydrateAndActivateRegistry: () => Promise<void>;
 }): void {
   const findRequesterRun = (runId: string) =>
     getRegistry()
@@ -62,7 +62,7 @@ export function registerRestoredRunDeadlineSettlementTests({
       const createdAt = Date.parse("2026-03-24T11:59:00Z");
       vi.setSystemTime(createdAt + waitEndedAfterMs);
       mocks.resolveAgentTimeoutMs.mockReturnValue(60_000);
-      mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      mocks.restoreSubagentRunsFromDisk.mockImplementation((async (params: {
         runs: Map<string, unknown>;
         mergeOnly?: boolean;
       }) => {
@@ -89,7 +89,7 @@ export function registerRestoredRunDeadlineSettlementTests({
 
       const settleRootWork = observeRootWork();
       try {
-        hydrateAndActivateRegistry();
+        await hydrateAndActivateRegistry();
 
         await waitForFast(() => {
           const completedRun = findRequesterRun(runId);

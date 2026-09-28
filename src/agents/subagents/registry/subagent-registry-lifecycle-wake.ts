@@ -319,10 +319,9 @@ function hasRequesterWakeOwner(
   entry: SubagentRunRecord,
 ): boolean {
   const current = context.options.runs.get(entry.runId);
+  const pending = getPendingWakeCommit(context, entry);
   return (
-    current === entry ||
-    (current === undefined &&
-      getPendingWakeCommit(context, entry)?.isPublishedRetirement(entry) === true)
+    current === entry || (current === undefined && pending?.isPublishedRetirement(entry) === true)
   );
 }
 
@@ -334,7 +333,11 @@ function scheduleRequesterSettleWakeRetry(
 ): void {
   const pending = getPendingWakeCommit(context, entry);
   const nextAttemptAt = pending?.nextAttemptAt ?? entry.requesterSettleWake?.nextAttemptAt;
-  if (nextAttemptAt === undefined || nextAttemptAt <= Date.now()) {
+  if (
+    pending?.initialTransfer?.blocked ||
+    nextAttemptAt === undefined ||
+    nextAttemptAt <= Date.now()
+  ) {
     return;
   }
   const rearmGeneration = pending?.generation ?? entry.requesterSettleWake?.rearmGeneration;
@@ -377,15 +380,18 @@ export function scheduleRequesterSettleWake(
   const admittedWake = entry.requesterSettleWake;
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
+    pendingAtAdmission?.initialTransfer?.blocked ||
     (!admittedWake && !pendingAtAdmission) ||
     entry.collect ||
     (!pendingAtAdmission &&
       isCompletedRequesterDeliveryBlocked(entry) &&
       admittedWake?.requesterYieldBatch !== true) ||
-    entry.execution.status === "running" ||
-    !hasSubagentRunEnded(entry) ||
+    (!pendingAtAdmission?.initialTransfer &&
+      (entry.execution.status === "running" || !hasSubagentRunEnded(entry))) ||
     !requesterSessionKey ||
-    (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
+    (!pendingAtAdmission?.initialTransfer &&
+      entry.requesterTurnRunId &&
+      entry.expectsCompletionMessage === true) ||
     context.scheduledRequesterSettleWakeRuns.has(entry)
   ) {
     return;
@@ -435,6 +441,9 @@ export function scheduleRequesterSettleWake(
             const pending = getPendingWakeCommit(context, entry);
             if (pending) {
               await retryPendingWakeCommit(context, pending);
+              if (pending.initialTransfer?.completed) {
+                context.pendingRequesterSettleWakeRearms.add(entry);
+              }
               return;
             }
             if (

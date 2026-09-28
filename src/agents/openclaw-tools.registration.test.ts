@@ -539,7 +539,7 @@ describe("sessions_yield completion ownership", () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(1);
+      .mockResolvedValue(1);
     const onYield = vi.fn(async () => undefined);
 
     try {
@@ -569,7 +569,7 @@ describe("sessions_yield completion ownership", () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(0);
+      .mockResolvedValue(0);
     const onYield = vi.fn(async () => undefined);
 
     try {
@@ -596,7 +596,7 @@ describe("sessions_yield completion ownership", () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(0);
+      .mockResolvedValue(0);
     const onYield = vi.fn(async () => undefined);
 
     try {
@@ -625,7 +625,7 @@ describe("sessions_yield completion ownership", () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(1);
+      .mockResolvedValue(1);
     const claimYieldCompletion = vi.fn(() => true);
     const onYield = vi.fn(async () => undefined);
 
@@ -660,7 +660,7 @@ describe("sessions_yield completion ownership", () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(0);
+      .mockResolvedValue(0);
     const claimYieldCompletion = vi.fn(() => true);
     const onYield = vi.fn(async () => undefined);
 
@@ -688,7 +688,7 @@ describe("sessions_yield completion ownership", () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(1);
+      .mockResolvedValue(1);
     const failure = new Error("runtime completion owner failed");
     const claimYieldCompletion = vi.fn(() => {
       throw failure;

@@ -11,6 +11,7 @@ import {
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
+  loadSubagentRegistryFromSqlite,
   loadSubagentRunsByRunIdsFromSqlite,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
@@ -233,6 +234,9 @@ serveOwnedWorkerTasks(
               return readChannelIngressInDatabase(db, command);
             }
             if (command.type === "subagents.runs") {
+              if (command.scope.kind === "all") {
+                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+              }
               const rows =
                 command.scope.kind === "session"
                   ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })

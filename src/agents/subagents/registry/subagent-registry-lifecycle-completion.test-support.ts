@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { maybeWakeRequesterAfterAllChildrenSettled as runRequesterSettleWake } from "../announce/subagent-announce.requester-settle-wake.js";
@@ -33,7 +33,6 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -46,30 +45,20 @@ function bindPolicyReceipt(entry: SubagentRunRecord) {
   return bindSubagentRunRecord(snapshot);
 }
 
-export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
-  blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
-  settleRequesterCompletionBatch: Mock<typeof settleRequesterCompletionBatch>;
-  mutateRequesterSettleWakeBatch: Mock<typeof mutateRequesterSettleWakeBatch>;
+function createRequesterSettleWakeMutationFixture(
   ownersByEntry: WeakMap<
     SubagentRunRecord,
     Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow">
-  >;
-}): void {
-  // This fixture mocks storage for controller-policy tests. Registered worker tests
-  // separately own receipt reconciliation and actual native commit evidence.
-  completionDeliveryMocks.mutateRequesterSettleWakeBatch.mockImplementation(async (params) => {
+  >,
+): typeof mutateRequesterSettleWakeBatch {
+  return async (params) => {
     params.assertCurrent();
     if (params.committed) {
       throw new Error("Native receipt reconciliation requires the registered worker fixture");
     }
     const first = params.entries[0];
-    const owner = first && completionDeliveryMocks.ownersByEntry.get(first);
-    if (
-      !owner ||
-      params.entries.some(
-        (entry) => completionDeliveryMocks.ownersByEntry.get(entry)?.runs !== owner.runs,
-      )
-    ) {
+    const owner = first && ownersByEntry.get(first);
+    if (!owner || params.entries.some((entry) => ownersByEntry.get(entry)?.runs !== owner.runs)) {
       throw new Error("Requester policy fixture lost its controller owner");
     }
     const previous = new Map(
@@ -122,7 +111,53 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
         ),
     });
     return { applied: true, publication: publication.publication };
-  });
+  };
+}
+
+export async function mockRegistryRequesterWakeMutation() {
+  const store = await import("../completion/subagent-completion-admission.store.js");
+  const { persistSubagentRunsToDiskAsyncOrThrow } = await import("./subagent-registry-state.js");
+  const original = store.mutateRequesterSettleWakeBatch;
+  const ownersByEntry = new WeakMap<
+    SubagentRunRecord,
+    Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow">
+  >();
+  const owner: Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow"> = {
+    runs: subagentRuns,
+    persistAsyncOrThrow: (context, callbacks, ...ids) =>
+      persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, { context, ...callbacks }),
+  };
+  const mutate = createRequesterSettleWakeMutationFixture(ownersByEntry);
+  const spy = vi
+    .spyOn(store, "mutateRequesterSettleWakeBatch")
+    .mockImplementation((params) =>
+      params.entries.some((entry) => ownersByEntry.has(entry)) ? mutate(params) : original(params),
+    );
+  onTestFinished(() => spy.mockRestore());
+  return (entries: readonly SubagentRunRecord[]) => {
+    for (const entry of entries) {
+      if (subagentRuns.get(entry.runId) !== entry) {
+        throw new Error("Requester policy fixture row was replaced before binding");
+      }
+      ownersByEntry.set(entry, owner);
+    }
+  };
+}
+
+export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
+  blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+  settleRequesterCompletionBatch: Mock<typeof settleRequesterCompletionBatch>;
+  mutateRequesterSettleWakeBatch: Mock<typeof mutateRequesterSettleWakeBatch>;
+  ownersByEntry: WeakMap<
+    SubagentRunRecord,
+    Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow">
+  >;
+}): void {
+  // This fixture mocks storage for controller-policy tests. Registered worker tests
+  // separately own receipt reconciliation and actual native commit evidence.
+  completionDeliveryMocks.mutateRequesterSettleWakeBatch.mockImplementation(
+    createRequesterSettleWakeMutationFixture(completionDeliveryMocks.ownersByEntry),
+  );
   completionDeliveryMocks.settleRequesterCompletionBatch.mockImplementation(
     async ({
       entries,
@@ -292,15 +327,13 @@ export function registerPrivateCompletionSettlementTests({
         expect(entry.cleanupHandled).not.toBe(true);
         expect(entry.completion?.resultText).toBe("private child result");
         if (requesterYielded) {
-          markRequesterTurnYieldedInRuns({
+          await controller.markRequesterTurnYielded({
             requesterSessionKey: entry.requesterSessionKey,
             requesterTurnRunId: "run-requester",
-            runs,
-            persistOrThrow: () => undefined,
           });
         }
         expect(
-          controller.settleRequesterTurnAfterSessionSpawns({
+          await controller.settleRequesterTurnAfterSessionSpawns({
             requesterSessionKey: entry.requesterSessionKey,
             requesterTurnRunId: "run-requester",
             requesterYielded,

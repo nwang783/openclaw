@@ -11,6 +11,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { markRequesterTurnYieldedInRuns } from "./subagents/registry/subagent-registry-requester-yield.js";
+import { createRequesterInitialTransferFixture } from "./subagents/registry/subagent-registry-requester-yield.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
@@ -88,14 +89,15 @@ describe("requester yield ownership", () => {
     resetProcessRegistryForTests();
   });
 
-  it("models an owned child the old cron claim could mark", () => {
+  it("models an owned child the old cron claim could mark", async () => {
     const childRun = seedRequiredChild();
-    const marked = markRequesterTurnYieldedInRuns({
+    const runs = new Map([[childRun.runId, childRun]]);
+    const marked = await markRequesterTurnYieldedInRuns({
       requesterSessionKey: CRON_RUN_KEY,
       requesterAgentId: "main",
       requesterTurnRunId: "run-requester",
-      runs: new Map([[childRun.runId, childRun]]),
-      persistOrThrow: () => {},
+      runs,
+      transfer: createRequesterInitialTransferFixture(runs, () => {}),
     });
 
     expect(marked).toBe(1);
@@ -512,7 +514,7 @@ describe("requester yield ownership", () => {
     expect((await turn1.execute("yield-turn-1", {})).details).toMatchObject({ status: "yielded" });
     expect(turn1Yield).toHaveBeenCalledOnce();
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey,
         requesterAgentId: "main",
         requesterTurnRunId: "run-turn-1",

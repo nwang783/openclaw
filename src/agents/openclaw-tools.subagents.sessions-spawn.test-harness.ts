@@ -241,7 +241,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   vi.mocked(persistence.persistSubagentRunsToDiskOrThrow).mockImplementation(
     hoisted.notifyEventWaiters,
   );
-  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockResolvedValue(0);
   // Prepare the async announcement mock before lifecycle assertions start waiting.
   await import("./subagents/announce/subagent-announce.js");
   if (!cachedCreateSessionsSpawnTool) {

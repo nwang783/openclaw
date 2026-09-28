@@ -269,6 +269,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {
+    if (command.scope.kind === "all") {
+      return bytes;
+    }
     return (
       bytes +
       (command.scope.kind === "session"

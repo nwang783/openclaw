@@ -110,6 +110,14 @@ export type PendingRequesterSettleWakeCommit = {
   ): boolean | Promise<boolean>;
   generation: number | undefined;
   committedWake?: RequesterWakeCommittedWrite;
+  initialTransfer?: {
+    kind: "intent" | "yielded-cohort" | "completed-cohort";
+    completion: Promise<void>;
+    published: boolean;
+    completed: boolean;
+    blocked: boolean;
+    retire(): void;
+  };
   stateContext?: OpenClawStateWorkerContext;
   isPublishedRetirement(entry: SubagentRunRecord): boolean;
   adoptPublished(entries: readonly SubagentRunRecord[]): void;

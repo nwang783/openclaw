@@ -22,6 +22,7 @@ import type {
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 
@@ -102,7 +103,7 @@ export function createSubagentRegistryMockState() {
     clearSubagentRunsReadCacheForTest: vi.fn(),
     persistSubagentRunsToDisk: vi.fn<typeof persistSubagentRunsToDisk>(),
     persistSubagentRunsToDiskOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
-    restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(() => 0),
+    restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
     getSubagentRunsSnapshotForRead: vi.fn(
       (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
         new Map(runs),
@@ -137,6 +138,14 @@ export function createSubagentRegistryMockState() {
     lifecycleGeneration: "test-generation",
   };
   return Object.assign(mocks, {
+    mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) =>
+      mocks.restoreSubagentRunsFromDisk.mockImplementation(async ({ runs }) => {
+        const entries = createEntries();
+        for (const entry of entries) {
+          runs.set(entry.runId, entry);
+        }
+        return entries.length;
+      }),
     sessionAccessors: {
       findTranscriptEvent: vi.fn(async () => undefined),
       listSessionEntriesCore: mocks.listSessionEntriesCore,

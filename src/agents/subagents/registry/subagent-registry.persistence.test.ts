@@ -176,12 +176,12 @@ describe("subagent registry persistence", () => {
     });
   };
 
-  const restartRegistry = () => {
+  const restartRegistry = async () => {
     resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
+    await initSubagentRegistry();
     const recoveryRuntime = createSubagentPersistenceRuntime(callGateway);
     const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
-    activateSubagentRegistry(() => gateway as never);
+    await activateSubagentRegistry(() => gateway as never);
   };
 
   function saveCanonicalRunFixtures(runs: ReadonlyMap<string, SubagentRunFixture>) {
@@ -383,7 +383,7 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-two",
     });
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
 
     // announce should NOT be called since cleanupHandled was true
@@ -514,7 +514,7 @@ describe("subagent registry persistence", () => {
       },
     });
 
-    restartRegistry();
+    await restartRegistry();
     const wait = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",
       agentId: "main",
@@ -611,7 +611,7 @@ describe("subagent registry persistence", () => {
     let retryReady = false;
     let readiness: Promise<void> | undefined;
     try {
-      restartRegistry();
+      await restartRegistry();
       await vi.waitFor(
         () => expect(announceSpy, "first announcement admitted").toHaveBeenCalledOnce(),
         {
@@ -652,7 +652,7 @@ describe("subagent registry persistence", () => {
 
       announceSpy.mockResolvedValueOnce("delivered");
       const beforeRetry = Date.now();
-      restartRegistry();
+      await restartRegistry();
       await vi.waitFor(
         () => expect(settlement.run, "retry reached requester settlement").toHaveBeenCalledOnce(),
         {
@@ -701,7 +701,7 @@ describe("subagent registry persistence", () => {
       seedChildSessions: false,
     });
 
-    restartRegistry();
+    await restartRegistry();
     await waitForRegistryWork(async () => {
       const after = readPersistedRegistry();
       return after.runs?.["run-orphan-restore"]?.cleanupCompletedAt !== undefined;
@@ -743,7 +743,7 @@ describe("subagent registry persistence", () => {
       { seedChildSessions: false },
     );
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
 
     expect(announceSpy).not.toHaveBeenCalled();
@@ -783,7 +783,7 @@ describe("subagent registry persistence", () => {
       { seedChildSessions: false },
     );
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();
@@ -840,7 +840,7 @@ describe("subagent registry persistence", () => {
       abortedLastRun: true,
     });
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
     await testing.sweepOnceForTests();
 
@@ -872,7 +872,7 @@ describe("subagent registry persistence", () => {
 
     saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
 
-    restartRegistry();
+    await restartRegistry();
     await waitForRegistryWork(() =>
       Promise.resolve(readPersistedRegistry().runs?.["run-orphan-attachments"] === undefined),
     );

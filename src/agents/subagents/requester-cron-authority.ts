@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
+import {
+  prepareSessionMutationFacts,
+  type SessionFactsRead,
+} from "../../gateway/session-sharing-preparation.js";
 import {
   getAgentRunContext,
   getAgentRunLifecycleGeneration,
@@ -33,7 +36,7 @@ type RequesterCronAuthority = {
   requesterTurnRunId: string;
   lifecycleGeneration: string;
   sessionLifecycleRevision?: string;
-  storePath: string;
+  sessionFacts: SessionFactsRead<PreparedSessionMutationFacts>;
   runs: ReadonlyMap<string, SubagentRunRecord>;
   batch: readonly SubagentRunRecord[];
   rearmGeneration?: number;
@@ -56,6 +59,7 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
         entry.active = false;
         entry.releaseOperatorAuthority?.();
         entry.releaseOperatorAuthority = undefined;
+        entry.sessionFacts.release();
       }
     }
     value.byEntry = new WeakMap();
@@ -68,6 +72,7 @@ function discard(authority: RequesterCronAuthority): void {
   const releaseOperatorAuthority = authority.releaseOperatorAuthority;
   authority.releaseOperatorAuthority = undefined;
   releaseOperatorAuthority?.();
+  authority.sessionFacts.release();
   // Pending rows must remember a revoked operator restriction. Forgetting it
   // would let a later retry take the no-captured-operator dispatch path. The
   // weak entry binding retires with its row or an explicitly captured successor.
@@ -104,14 +109,16 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   ) {
     return false;
   }
-  const session = loadSessionEntryReadOnly({
-    storePath: authority.storePath,
-    sessionKey: authority.requesterSessionKey,
-  });
+  let session: PreparedSessionMutationFacts["target"];
+  try {
+    session = authority.sessionFacts.readCurrent(getRuntimeConfig()).target;
+  } catch {
+    return false;
+  }
   if (
-    session?.sessionId !== authority.requesterSessionId ||
-    session.lifecycleRevision !== authority.sessionLifecycleRevision ||
-    session.archivedAt !== undefined
+    session?.entry.sessionId !== authority.requesterSessionId ||
+    session.entry.lifecycleRevision !== authority.sessionLifecycleRevision ||
+    session.entry.archivedAt !== undefined
   ) {
     return false;
   }
@@ -143,16 +150,24 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   });
 }
 
-/** Prepare while the exact original run is live; commit only after yield intent persists. */
-export function captureRequesterCronAuthority(params: {
+export type PreparedRequesterCronAuthority = {
+  assertCurrent(): void;
+  validate(): Promise<void>;
+  bind(params: {
+    batch: readonly SubagentRunRecord[];
+    runs: ReadonlyMap<string, SubagentRunRecord>;
+  }): Promise<{ commit(): void; revoke(): void } | undefined>;
+  release(): void | Promise<void>;
+};
+
+/** Capture the original session source before registry hydration can yield. */
+export function prepareRequesterCronAuthority(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterTurnRunId: string;
-  batch: readonly SubagentRunRecord[];
-  runs: ReadonlyMap<string, SubagentRunRecord>;
-}): { commit: () => void; revoke: () => void } | undefined {
+}): PreparedRequesterCronAuthority | undefined {
   const requesterAgentId = params.requesterAgentId;
-  if (!requesterAgentId || params.batch.length === 0) {
+  if (!requesterAgentId) {
     return undefined;
   }
   const cronCapture = captureActiveCronManagementAuthority({
@@ -195,45 +210,133 @@ export function captureRequesterCronAuthority(params: {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
     operatorAuthority.assertCurrent();
   }
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-    agentId: requesterAgentId,
-  });
-  const session = loadSessionEntryReadOnly({ storePath, sessionKey: params.requesterSessionKey });
-  if (session?.sessionId !== capture.sessionId || session.archivedAt !== undefined) {
-    return undefined;
+  let releaseOperatorAuthority = operatorAuthority?.retain?.();
+  let preparedFacts: Promise<SessionFactsRead<PreparedSessionMutationFacts>>;
+  try {
+    preparedFacts = prepareSessionMutationFacts({
+      cfg: getRuntimeConfig(),
+      sessionKey: params.requesterSessionKey,
+      agentId: requesterAgentId,
+      allowMissing: true,
+    });
+  } catch (error) {
+    releaseOperatorAuthority?.();
+    throw error;
   }
-  const authority: RequesterCronAuthority = {
-    ...params,
-    requesterAgentId,
-    requesterSessionId: capture.sessionId,
-    managementEntitlement: cronCapture?.managementEntitlement,
-    requesterOwner: cronCapture?.requesterOwner,
-    operatorAuthority,
-    releaseOperatorAuthority: operatorAuthority?.retain?.(),
-    lifecycleGeneration: capture.lifecycleGeneration,
-    sessionLifecycleRevision: session.lifecycleRevision,
-    storePath,
-    batch: [...params.batch],
-    active: true,
-  };
-  const sessionAuthorities = state.bySession.get(authority.requesterSessionKey) ?? new Set();
-  sessionAuthorities.add(authority);
-  state.bySession.set(authority.requesterSessionKey, sessionAuthorities);
-  return {
-    commit: () => {
-      if (!authority.active || !capture.isActive()) {
-        discard(authority);
-        return;
-      }
-      for (const entry of authority.batch) {
-        const previous = state.byEntry.get(entry);
-        if (previous) {
-          discard(previous);
-        }
-        state.byEntry.set(entry, authority);
-      }
+  // Hydration can fail before this accepted preparation is consumed.
+  let readyFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
+  void preparedFacts.then(
+    (facts) => {
+      readyFacts = facts;
     },
-    revoke: () => discard(authority),
+    () => {},
+  );
+  let consumed = false;
+  let transferred = false;
+  let released = false;
+  let boundAuthority: RequesterCronAuthority | undefined;
+  const assertCaptureCurrent = () => {
+    if (!capture.isActive()) {
+      throw new Error("Requester authority retired during session preparation");
+    }
+    operatorAuthority?.assertCurrent();
+  };
+  const assertCurrent = () => {
+    assertCaptureCurrent();
+    if ((released && !transferred) || boundAuthority?.active === false) {
+      throw new Error("Requester authority retired before yield handoff");
+    }
+    if (readyFacts) {
+      const current = readyFacts.readCurrent(getRuntimeConfig()).target;
+      if (
+        current?.entry.sessionId !== capture.sessionId ||
+        current.entry.archivedAt !== undefined ||
+        (boundAuthority &&
+          current.entry.lifecycleRevision !== boundAuthority.sessionLifecycleRevision)
+      ) {
+        throw new Error("Requester session authority changed before yield handoff");
+      }
+    }
+  };
+  const releaseFacts = (sessionFacts?: SessionFactsRead<PreparedSessionMutationFacts>) => {
+    try {
+      if (sessionFacts && !transferred) {
+        sessionFacts.release();
+      }
+    } catch {
+      // Cleanup must still release the retained operator authority.
+    } finally {
+      releaseOperatorAuthority?.();
+      releaseOperatorAuthority = undefined;
+    }
+  };
+  return {
+    assertCurrent,
+    async validate() {
+      await preparedFacts;
+      assertCurrent();
+    },
+    async bind({ batch, runs }) {
+      if (consumed || released) {
+        throw new Error("Requester authority preparation was already consumed");
+      }
+      consumed = true;
+      const sessionFacts = await preparedFacts;
+      assertCurrent();
+      const session = sessionFacts.readCurrent(getRuntimeConfig()).target;
+      if (
+        batch.length === 0 ||
+        session?.entry.sessionId !== capture.sessionId ||
+        session.entry.archivedAt !== undefined
+      ) {
+        return undefined;
+      }
+      const authority: RequesterCronAuthority = {
+        ...params,
+        requesterAgentId,
+        requesterSessionId: capture.sessionId,
+        managementEntitlement: cronCapture?.managementEntitlement,
+        requesterOwner: cronCapture?.requesterOwner,
+        operatorAuthority,
+        releaseOperatorAuthority,
+        lifecycleGeneration: capture.lifecycleGeneration,
+        sessionLifecycleRevision: session.entry.lifecycleRevision,
+        sessionFacts,
+        runs,
+        batch: [...batch],
+        active: true,
+      };
+      boundAuthority = authority;
+      transferred = true;
+      releaseOperatorAuthority = undefined;
+      const sessionAuthorities = state.bySession.get(authority.requesterSessionKey) ?? new Set();
+      sessionAuthorities.add(authority);
+      state.bySession.set(authority.requesterSessionKey, sessionAuthorities);
+      return {
+        commit: () => {
+          assertCurrent();
+          for (const entry of authority.batch) {
+            const previous = state.byEntry.get(entry);
+            if (previous && previous !== authority) {
+              discard(previous);
+            }
+            state.byEntry.set(entry, authority);
+          }
+        },
+        revoke: () => discard(authority),
+      };
+    },
+    release() {
+      if (released) {
+        return undefined;
+      }
+      released = true;
+      if (readyFacts) {
+        releaseFacts(readyFacts);
+        return undefined;
+      }
+      return preparedFacts.then(releaseFacts, () => releaseFacts());
+    },
   };
 }
 
