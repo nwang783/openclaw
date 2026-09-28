@@ -2,10 +2,6 @@ import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-prot
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveManifestActivationPluginIds } from "../../plugins/activation-planner.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
-import type {
-  WorkerBrowserLaunchDescriptor,
-  WorkerComputerLaunchDescriptor,
-} from "../../worker/launch-descriptor.js";
 import type { WorkerOptionalLocalToolName } from "../../worker/tool-authority.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
@@ -18,14 +14,7 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
   portalAvailable?: boolean;
-}): Promise<{
-  browser?: WorkerBrowserLaunchDescriptor;
-  computer?: WorkerComputerLaunchDescriptor;
-  toolAuthority: ReturnType<typeof resolveWorkerToolAuthority>["toolAuthority"];
-  capabilityProfile: ReturnType<typeof resolveWorkerToolAuthority>["capabilityProfile"];
-  policy: ReturnType<typeof resolveWorkerToolAuthority>["policy"];
-  preparedComputer?: PreparedWorkerComputer;
-}> {
+}) {
   const computerSupported =
     params.turn.modelHasVision !== false &&
     params.protocolFeatures.includes(WORKER_COMPUTER_PROTOCOL_FEATURE);

@@ -85,11 +85,7 @@ import {
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
-import {
-  createWorkerConnection,
-  WorkerConnection,
-  type WorkerConnectionState,
-} from "./worker-connection.js";
+import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
@@ -1023,8 +1019,9 @@ async function setup(options?: FakeGatewayOptions): Promise<{
         ];
       }),
     };
-    if (!Value.Check(WorkerToolSurfaceSchema, surface))
+    if (!Value.Check(WorkerToolSurfaceSchema, surface)) {
       throw new Error("Invalid test tool surface");
+    }
     return surface;
   };
   return { gateway, workspaceDir, launch };
